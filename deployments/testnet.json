@@ -1,0 +1,9 @@
+{
+  "network": "testnet",
+  "networkPassphrase": "Test SDF Network ; September 2015",
+  "deployedAt": "2026-09-14T14:53:01Z",
+  "commit": "uncommitted",
+  "contracts": {
+    "programme": "CBN6MNOWZISG6EXVCUQSGKASFSIBVDBZSVASI6FZYBLBMLHMQWL6SAL7"
+  }
+}
