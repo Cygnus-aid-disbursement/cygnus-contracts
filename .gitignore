@@ -1,0 +1,6 @@
+/target
+**/*.rs.bk
+.env
+.env.local
+deployments/local-testnet.json
+.DS_Store
