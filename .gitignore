@@ -4,3 +4,4 @@
 .env.local
 deployments/local-testnet.json
 .DS_Store
+/contracts/programme/test_snapshots/
