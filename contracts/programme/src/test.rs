@@ -394,6 +394,322 @@ fn merkle_tree_roundtrip() {
     }
 }
 
+#[test]
+fn views_and_hash_leaf() {
+    let c = setup();
+    let id = create(&c);
+    c.client.fund(&id, &1_000);
+    c.client.claim(&id, &0, &hash(&c.env, 20));
+    c.client.approve(&id, &0);
+
+    // Test hash_leaf client endpoint matches merkle module
+    let r_ref = hash(&c.env, 77);
+    let expected_leaf = merkle::hash_leaf(&c.env, &r_ref, 250);
+    let client_leaf = c.client.hash_leaf(&r_ref, &250);
+    assert_eq!(client_leaf, expected_leaf);
+
+    // Disburse batch 0
+    let (root, _, total, count) = build_batch(&c.env, 2, 80);
+    let batch_idx = c.client.disburse(&id, &root, &total, &count);
+    assert_eq!(batch_idx, 0);
+
+    // get_batch returns Some for existing batch, None for unknown
+    let batch = c.client.get_batch(&id, &batch_idx).unwrap();
+    assert_eq!(batch.index, 0);
+    assert_eq!(batch.root, root);
+    assert_eq!(batch.total, total);
+    assert_eq!(batch.count, count);
+    assert!(c.client.get_batch(&id, &99).is_none());
+    assert!(c.client.get_batch(&999, &0).is_none());
+
+    // get_programme returns Some for existing, None for unknown
+    assert!(c.client.get_programme(&id).is_some());
+    assert!(c.client.get_programme(&999).is_none());
+}
+
+#[test]
+fn programme_not_found_on_all_mutations() {
+    let c = setup();
+    let missing_id = 999_u64;
+
+    assert_eq!(
+        c.client.try_fund(&missing_id, &100).err(),
+        Some(Ok(Error::ProgrammeNotFound))
+    );
+    assert_eq!(
+        c.client.try_claim(&missing_id, &0, &hash(&c.env, 1)).err(),
+        Some(Ok(Error::ProgrammeNotFound))
+    );
+    assert_eq!(
+        c.client.try_approve(&missing_id, &0).err(),
+        Some(Ok(Error::ProgrammeNotFound))
+    );
+    assert_eq!(
+        c.client.try_reject(&missing_id, &0, &hash(&c.env, 1)).err(),
+        Some(Ok(Error::ProgrammeNotFound))
+    );
+    assert_eq!(
+        c.client
+            .try_disburse(&missing_id, &hash(&c.env, 1), &100, &1)
+            .err(),
+        Some(Ok(Error::ProgrammeNotFound))
+    );
+    assert_eq!(
+        c.client.try_refund_remainder(&missing_id).err(),
+        Some(Ok(Error::ProgrammeNotFound))
+    );
+}
+
+#[test]
+fn closed_programme_rejects_mutations() {
+    let c = setup();
+    let id = create(&c);
+    c.client.fund(&id, &1_000);
+
+    // Fast-forward past end date and refund to close
+    c.env.ledger().with_mut(|l| l.timestamp = 25 * DAY);
+    let refunded = c.client.refund_remainder(&id);
+    assert_eq!(refunded, 1_000);
+    assert_eq!(
+        c.client.get_programme(&id).unwrap().status,
+        ProgrammeStatus::Closed
+    );
+
+    // Every mutation must now be rejected with AlreadyClosed
+    assert_eq!(
+        c.client.try_fund(&id, &100).err(),
+        Some(Ok(Error::AlreadyClosed))
+    );
+    assert_eq!(
+        c.client.try_claim(&id, &0, &hash(&c.env, 10)).err(),
+        Some(Ok(Error::AlreadyClosed))
+    );
+    assert_eq!(
+        c.client.try_approve(&id, &0).err(),
+        Some(Ok(Error::AlreadyClosed))
+    );
+    assert_eq!(
+        c.client.try_reject(&id, &0, &hash(&c.env, 10)).err(),
+        Some(Ok(Error::AlreadyClosed))
+    );
+    assert_eq!(
+        c.client
+            .try_disburse(&id, &hash(&c.env, 10), &100, &1)
+            .err(),
+        Some(Ok(Error::AlreadyClosed))
+    );
+    assert_eq!(
+        c.client.try_refund_remainder(&id).err(),
+        Some(Ok(Error::AlreadyClosed))
+    );
+}
+
+#[test]
+fn milestone_index_out_of_range() {
+    let c = setup();
+    let id = create(&c);
+    c.client.fund(&id, &1_000);
+
+    // Milestones length is 2 (valid indices: 0, 1)
+    let oob_index = 2_u32;
+    assert_eq!(
+        c.client.try_claim(&id, &oob_index, &hash(&c.env, 1)).err(),
+        Some(Ok(Error::MilestoneIndexOutOfRange))
+    );
+    assert_eq!(
+        c.client.try_approve(&id, &oob_index).err(),
+        Some(Ok(Error::MilestoneIndexOutOfRange))
+    );
+    assert_eq!(
+        c.client.try_reject(&id, &oob_index, &hash(&c.env, 1)).err(),
+        Some(Ok(Error::MilestoneIndexOutOfRange))
+    );
+}
+
+#[test]
+fn milestone_resolution_states() {
+    let c = setup();
+    let id = create(&c);
+    c.client.fund(&id, &1_000);
+
+    // Rejecting a pending milestone returns MilestoneNotClaimed
+    assert_eq!(
+        c.client.try_reject(&id, &0, &hash(&c.env, 99)).err(),
+        Some(Ok(Error::MilestoneNotClaimed))
+    );
+
+    // Claim and approve milestone 0
+    c.client.claim(&id, &0, &hash(&c.env, 10));
+    c.client.approve(&id, &0);
+
+    // Once Approved, both approve and reject return MilestoneAlreadyResolved
+    assert_eq!(
+        c.client.try_approve(&id, &0).err(),
+        Some(Ok(Error::MilestoneAlreadyResolved))
+    );
+    assert_eq!(
+        c.client.try_reject(&id, &0, &hash(&c.env, 99)).err(),
+        Some(Ok(Error::MilestoneAlreadyResolved))
+    );
+
+    // Claim and reject milestone 1
+    c.client.claim(&id, &1, &hash(&c.env, 20));
+    c.client.reject(&id, &1, &hash(&c.env, 30));
+
+    // Once Rejected, re-rejecting returns MilestoneAlreadyResolved
+    assert_eq!(
+        c.client.try_reject(&id, &1, &hash(&c.env, 31)).err(),
+        Some(Ok(Error::MilestoneAlreadyResolved))
+    );
+}
+
+#[test]
+fn refund_remainder_nothing_to_refund() {
+    let c = setup();
+    let id = create(&c);
+    c.client.fund(&id, &1_000);
+
+    // Claim and approve milestone 0 (600) and milestone 1 (400)
+    c.client.claim(&id, &0, &hash(&c.env, 10));
+    c.client.approve(&id, &0);
+    c.client.claim(&id, &1, &hash(&c.env, 20));
+    c.client.approve(&id, &1);
+
+    // Disburse all 1,000 across two batches (600 + 400)
+    let (root0, _, _, _) = build_batch(&c.env, 50, 10);
+    c.client.disburse(&id, &root0, &600, &50);
+    let (root1, _, _, _) = build_batch(&c.env, 40, 20);
+    c.client.disburse(&id, &root1, &400, &40);
+
+    let p = c.client.get_programme(&id).unwrap();
+    assert_eq!(p.funded, 1_000);
+    assert_eq!(p.disbursed, 1_000);
+
+    // Fast-forward past end date
+    c.env.ledger().with_mut(|l| l.timestamp = 25 * DAY);
+    assert_eq!(
+        c.client.try_refund_remainder(&id).err(),
+        Some(Ok(Error::NothingToRefund))
+    );
+}
+
+#[test]
+fn non_positive_amounts_rejected() {
+    let c = setup();
+
+    // Negative total at programme creation
+    let e = c
+        .client
+        .try_create_programme(
+            &c.sponsor,
+            &c.implementer,
+            &c.asset,
+            &-500,
+            &milestones(&c.env),
+            &ApproverConfig::Single(c.approver.clone()),
+            &hash(&c.env, 9),
+        )
+        .err()
+        .unwrap();
+    assert_eq!(e, Ok(Error::InvalidAmount));
+
+    // Milestone with zero amount
+    let zero_milestones = vec![
+        &c.env,
+        Milestone {
+            description_hash: hash(&c.env, 1),
+            amount: 0,
+            due_by: 10 * DAY,
+        },
+    ];
+    let e = c
+        .client
+        .try_create_programme(
+            &c.sponsor,
+            &c.implementer,
+            &c.asset,
+            &1_000,
+            &zero_milestones,
+            &ApproverConfig::Single(c.approver.clone()),
+            &hash(&c.env, 9),
+        )
+        .err()
+        .unwrap();
+    assert_eq!(e, Ok(Error::InvalidAmount));
+
+    // Milestone with negative amount
+    let neg_milestones = vec![
+        &c.env,
+        Milestone {
+            description_hash: hash(&c.env, 1),
+            amount: -100,
+            due_by: 10 * DAY,
+        },
+    ];
+    let e = c
+        .client
+        .try_create_programme(
+            &c.sponsor,
+            &c.implementer,
+            &c.asset,
+            &1_000,
+            &neg_milestones,
+            &ApproverConfig::Single(c.approver.clone()),
+            &hash(&c.env, 9),
+        )
+        .err()
+        .unwrap();
+    assert_eq!(e, Ok(Error::InvalidAmount));
+
+    // Negative fund amount
+    let id = create(&c);
+    let e = c.client.try_fund(&id, &-100).err().unwrap();
+    assert_eq!(e, Ok(Error::InvalidAmount));
+
+    // Negative disburse total
+    c.client.fund(&id, &1_000);
+    c.client.claim(&id, &0, &hash(&c.env, 20));
+    c.client.approve(&id, &0);
+    let e = c
+        .client
+        .try_disburse(&id, &hash(&c.env, 50), &-50, &5)
+        .err()
+        .unwrap();
+    assert_eq!(e, Ok(Error::InvalidBatch));
+}
+
+#[test]
+fn claim_before_funding_and_approve_after_funding() {
+    let c = setup();
+    let id = create(&c);
+
+    // Implementer can claim milestone 0 before any funding is sent
+    c.client.claim(&id, &0, &hash(&c.env, 15));
+    let p = c.client.get_programme(&id).unwrap();
+    assert_eq!(
+        p.milestone_states.get_unchecked(0).status,
+        MilestoneStatus::Claimed
+    );
+
+    // Approver cannot approve yet because released(0) + amount(600) > funded(0)
+    assert_eq!(
+        c.client.try_approve(&id, &0).err(),
+        Some(Ok(Error::InsufficientFunding))
+    );
+
+    // Sponsor funds 600
+    c.client.fund(&id, &600);
+
+    // Approver can now approve
+    c.client.approve(&id, &0);
+    let p = c.client.get_programme(&id).unwrap();
+    assert_eq!(p.released, 600);
+    assert_eq!(
+        p.milestone_states.get_unchecked(0).status,
+        MilestoneStatus::Approved
+    );
+}
+
 // --- test-only Merkle helpers -------------------------------------------------
 
 // Build a batch of `n` synthetic leaves whose amounts sum to `total`. Returns
