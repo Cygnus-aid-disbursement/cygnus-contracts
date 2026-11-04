@@ -686,6 +686,38 @@ fn non_positive_amounts_rejected() {
     assert_eq!(e, Ok(Error::InvalidBatch));
 }
 
+#[test]
+fn claim_before_funding_and_approve_after_funding() {
+    let c = setup();
+    let id = create(&c);
+
+    // Implementer can claim milestone 0 before any funding is sent
+    c.client.claim(&id, &0, &hash(&c.env, 15));
+    let p = c.client.get_programme(&id).unwrap();
+    assert_eq!(
+        p.milestone_states.get_unchecked(0).status,
+        MilestoneStatus::Claimed
+    );
+
+    // Approver cannot approve yet because released(0) + amount(600) > funded(0)
+    assert_eq!(
+        c.client.try_approve(&id, &0).err(),
+        Some(Ok(Error::InsufficientFunding))
+    );
+
+    // Sponsor funds 600
+    c.client.fund(&id, &600);
+
+    // Approver can now approve
+    c.client.approve(&id, &0);
+    let p = c.client.get_programme(&id).unwrap();
+    assert_eq!(p.released, 600);
+    assert_eq!(
+        p.milestone_states.get_unchecked(0).status,
+        MilestoneStatus::Approved
+    );
+}
+
 // --- test-only Merkle helpers -------------------------------------------------
 
 // Build a batch of `n` synthetic leaves whose amounts sum to `total`. Returns
