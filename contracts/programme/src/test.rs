@@ -571,6 +571,36 @@ fn milestone_resolution_states() {
     );
 }
 
+#[test]
+fn refund_remainder_nothing_to_refund() {
+    let c = setup();
+    let id = create(&c);
+    c.client.fund(&id, &1_000);
+
+    // Claim and approve milestone 0 (600) and milestone 1 (400)
+    c.client.claim(&id, &0, &hash(&c.env, 10));
+    c.client.approve(&id, &0);
+    c.client.claim(&id, &1, &hash(&c.env, 20));
+    c.client.approve(&id, &1);
+
+    // Disburse all 1,000 across two batches (600 + 400)
+    let (root0, _, _, _) = build_batch(&c.env, 50, 10);
+    c.client.disburse(&id, &root0, &600, &50);
+    let (root1, _, _, _) = build_batch(&c.env, 40, 20);
+    c.client.disburse(&id, &root1, &400, &40);
+
+    let p = c.client.get_programme(&id).unwrap();
+    assert_eq!(p.funded, 1_000);
+    assert_eq!(p.disbursed, 1_000);
+
+    // Fast-forward past end date
+    c.env.ledger().with_mut(|l| l.timestamp = 25 * DAY);
+    assert_eq!(
+        c.client.try_refund_remainder(&id).err(),
+        Some(Ok(Error::NothingToRefund))
+    );
+}
+
 // --- test-only Merkle helpers -------------------------------------------------
 
 // Build a batch of `n` synthetic leaves whose amounts sum to `total`. Returns
