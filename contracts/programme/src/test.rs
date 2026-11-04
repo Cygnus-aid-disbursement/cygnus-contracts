@@ -394,6 +394,39 @@ fn merkle_tree_roundtrip() {
     }
 }
 
+#[test]
+fn views_and_hash_leaf() {
+    let c = setup();
+    let id = create(&c);
+    c.client.fund(&id, &1_000);
+    c.client.claim(&id, &0, &hash(&c.env, 20));
+    c.client.approve(&id, &0);
+
+    // Test hash_leaf client endpoint matches merkle module
+    let r_ref = hash(&c.env, 77);
+    let expected_leaf = merkle::hash_leaf(&c.env, &r_ref, 250);
+    let client_leaf = c.client.hash_leaf(&r_ref, &250);
+    assert_eq!(client_leaf, expected_leaf);
+
+    // Disburse batch 0
+    let (root, _, total, count) = build_batch(&c.env, 2, 80);
+    let batch_idx = c.client.disburse(&id, &root, &total, &count);
+    assert_eq!(batch_idx, 0);
+
+    // get_batch returns Some for existing batch, None for unknown
+    let batch = c.client.get_batch(&id, &batch_idx).unwrap();
+    assert_eq!(batch.index, 0);
+    assert_eq!(batch.root, root);
+    assert_eq!(batch.total, total);
+    assert_eq!(batch.count, count);
+    assert!(c.client.get_batch(&id, &99).is_none());
+    assert!(c.client.get_batch(&999, &0).is_none());
+
+    // get_programme returns Some for existing, None for unknown
+    assert!(c.client.get_programme(&id).is_some());
+    assert!(c.client.get_programme(&999).is_none());
+}
+
 // --- test-only Merkle helpers -------------------------------------------------
 
 // Build a batch of `n` synthetic leaves whose amounts sum to `total`. Returns
