@@ -534,6 +534,43 @@ fn milestone_index_out_of_range() {
     );
 }
 
+#[test]
+fn milestone_resolution_states() {
+    let c = setup();
+    let id = create(&c);
+    c.client.fund(&id, &1_000);
+
+    // Rejecting a pending milestone returns MilestoneNotClaimed
+    assert_eq!(
+        c.client.try_reject(&id, &0, &hash(&c.env, 99)).err(),
+        Some(Ok(Error::MilestoneNotClaimed))
+    );
+
+    // Claim and approve milestone 0
+    c.client.claim(&id, &0, &hash(&c.env, 10));
+    c.client.approve(&id, &0);
+
+    // Once Approved, both approve and reject return MilestoneAlreadyResolved
+    assert_eq!(
+        c.client.try_approve(&id, &0).err(),
+        Some(Ok(Error::MilestoneAlreadyResolved))
+    );
+    assert_eq!(
+        c.client.try_reject(&id, &0, &hash(&c.env, 99)).err(),
+        Some(Ok(Error::MilestoneAlreadyResolved))
+    );
+
+    // Claim and reject milestone 1
+    c.client.claim(&id, &1, &hash(&c.env, 20));
+    c.client.reject(&id, &1, &hash(&c.env, 30));
+
+    // Once Rejected, re-rejecting returns MilestoneAlreadyResolved
+    assert_eq!(
+        c.client.try_reject(&id, &1, &hash(&c.env, 31)).err(),
+        Some(Ok(Error::MilestoneAlreadyResolved))
+    );
+}
+
 // --- test-only Merkle helpers -------------------------------------------------
 
 // Build a batch of `n` synthetic leaves whose amounts sum to `total`. Returns
