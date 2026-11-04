@@ -508,6 +508,32 @@ fn closed_programme_rejects_mutations() {
     );
 }
 
+#[test]
+fn milestone_index_out_of_range() {
+    let c = setup();
+    let id = create(&c);
+    c.client.fund(&id, &1_000);
+
+    // Milestones length is 2 (valid indices: 0, 1)
+    let oob_index = 2_u32;
+    assert_eq!(
+        c.client
+            .try_claim(&id, &oob_index, &hash(&c.env, 1))
+            .err(),
+        Some(Ok(Error::MilestoneIndexOutOfRange))
+    );
+    assert_eq!(
+        c.client.try_approve(&id, &oob_index).err(),
+        Some(Ok(Error::MilestoneIndexOutOfRange))
+    );
+    assert_eq!(
+        c.client
+            .try_reject(&id, &oob_index, &hash(&c.env, 1))
+            .err(),
+        Some(Ok(Error::MilestoneIndexOutOfRange))
+    );
+}
+
 // --- test-only Merkle helpers -------------------------------------------------
 
 // Build a batch of `n` synthetic leaves whose amounts sum to `total`. Returns
