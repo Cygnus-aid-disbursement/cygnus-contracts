@@ -427,6 +427,43 @@ fn views_and_hash_leaf() {
     assert!(c.client.get_programme(&999).is_none());
 }
 
+#[test]
+fn programme_not_found_on_all_mutations() {
+    let c = setup();
+    let missing_id = 999_u64;
+
+    assert_eq!(
+        c.client.try_fund(&missing_id, &100).err(),
+        Some(Ok(Error::ProgrammeNotFound))
+    );
+    assert_eq!(
+        c.client
+            .try_claim(&missing_id, &0, &hash(&c.env, 1))
+            .err(),
+        Some(Ok(Error::ProgrammeNotFound))
+    );
+    assert_eq!(
+        c.client.try_approve(&missing_id, &0).err(),
+        Some(Ok(Error::ProgrammeNotFound))
+    );
+    assert_eq!(
+        c.client
+            .try_reject(&missing_id, &0, &hash(&c.env, 1))
+            .err(),
+        Some(Ok(Error::ProgrammeNotFound))
+    );
+    assert_eq!(
+        c.client
+            .try_disburse(&missing_id, &hash(&c.env, 1), &100, &1)
+            .err(),
+        Some(Ok(Error::ProgrammeNotFound))
+    );
+    assert_eq!(
+        c.client.try_refund_remainder(&missing_id).err(),
+        Some(Ok(Error::ProgrammeNotFound))
+    );
+}
+
 // --- test-only Merkle helpers -------------------------------------------------
 
 // Build a batch of `n` synthetic leaves whose amounts sum to `total`. Returns
