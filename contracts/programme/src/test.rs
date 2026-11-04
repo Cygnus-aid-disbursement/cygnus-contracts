@@ -464,6 +464,50 @@ fn programme_not_found_on_all_mutations() {
     );
 }
 
+#[test]
+fn closed_programme_rejects_mutations() {
+    let c = setup();
+    let id = create(&c);
+    c.client.fund(&id, &1_000);
+
+    // Fast-forward past end date and refund to close
+    c.env.ledger().with_mut(|l| l.timestamp = 25 * DAY);
+    let refunded = c.client.refund_remainder(&id);
+    assert_eq!(refunded, 1_000);
+    assert_eq!(
+        c.client.get_programme(&id).unwrap().status,
+        ProgrammeStatus::Closed
+    );
+
+    // Every mutation must now be rejected with AlreadyClosed
+    assert_eq!(
+        c.client.try_fund(&id, &100).err(),
+        Some(Ok(Error::AlreadyClosed))
+    );
+    assert_eq!(
+        c.client.try_claim(&id, &0, &hash(&c.env, 10)).err(),
+        Some(Ok(Error::AlreadyClosed))
+    );
+    assert_eq!(
+        c.client.try_approve(&id, &0).err(),
+        Some(Ok(Error::AlreadyClosed))
+    );
+    assert_eq!(
+        c.client.try_reject(&id, &0, &hash(&c.env, 10)).err(),
+        Some(Ok(Error::AlreadyClosed))
+    );
+    assert_eq!(
+        c.client
+            .try_disburse(&id, &hash(&c.env, 10), &100, &1)
+            .err(),
+        Some(Ok(Error::AlreadyClosed))
+    );
+    assert_eq!(
+        c.client.try_refund_remainder(&id).err(),
+        Some(Ok(Error::AlreadyClosed))
+    );
+}
+
 // --- test-only Merkle helpers -------------------------------------------------
 
 // Build a batch of `n` synthetic leaves whose amounts sum to `total`. Returns
