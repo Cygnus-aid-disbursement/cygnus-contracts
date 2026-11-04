@@ -437,9 +437,7 @@ fn programme_not_found_on_all_mutations() {
         Some(Ok(Error::ProgrammeNotFound))
     );
     assert_eq!(
-        c.client
-            .try_claim(&missing_id, &0, &hash(&c.env, 1))
-            .err(),
+        c.client.try_claim(&missing_id, &0, &hash(&c.env, 1)).err(),
         Some(Ok(Error::ProgrammeNotFound))
     );
     assert_eq!(
@@ -447,9 +445,7 @@ fn programme_not_found_on_all_mutations() {
         Some(Ok(Error::ProgrammeNotFound))
     );
     assert_eq!(
-        c.client
-            .try_reject(&missing_id, &0, &hash(&c.env, 1))
-            .err(),
+        c.client.try_reject(&missing_id, &0, &hash(&c.env, 1)).err(),
         Some(Ok(Error::ProgrammeNotFound))
     );
     assert_eq!(
@@ -517,9 +513,7 @@ fn milestone_index_out_of_range() {
     // Milestones length is 2 (valid indices: 0, 1)
     let oob_index = 2_u32;
     assert_eq!(
-        c.client
-            .try_claim(&id, &oob_index, &hash(&c.env, 1))
-            .err(),
+        c.client.try_claim(&id, &oob_index, &hash(&c.env, 1)).err(),
         Some(Ok(Error::MilestoneIndexOutOfRange))
     );
     assert_eq!(
@@ -527,9 +521,7 @@ fn milestone_index_out_of_range() {
         Some(Ok(Error::MilestoneIndexOutOfRange))
     );
     assert_eq!(
-        c.client
-            .try_reject(&id, &oob_index, &hash(&c.env, 1))
-            .err(),
+        c.client.try_reject(&id, &oob_index, &hash(&c.env, 1)).err(),
         Some(Ok(Error::MilestoneIndexOutOfRange))
     );
 }
