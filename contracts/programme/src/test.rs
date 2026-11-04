@@ -601,6 +601,91 @@ fn refund_remainder_nothing_to_refund() {
     );
 }
 
+#[test]
+fn non_positive_amounts_rejected() {
+    let c = setup();
+
+    // Negative total at programme creation
+    let e = c
+        .client
+        .try_create_programme(
+            &c.sponsor,
+            &c.implementer,
+            &c.asset,
+            &-500,
+            &milestones(&c.env),
+            &ApproverConfig::Single(c.approver.clone()),
+            &hash(&c.env, 9),
+        )
+        .err()
+        .unwrap();
+    assert_eq!(e, Ok(Error::InvalidAmount));
+
+    // Milestone with zero amount
+    let zero_milestones = vec![
+        &c.env,
+        Milestone {
+            description_hash: hash(&c.env, 1),
+            amount: 0,
+            due_by: 10 * DAY,
+        },
+    ];
+    let e = c
+        .client
+        .try_create_programme(
+            &c.sponsor,
+            &c.implementer,
+            &c.asset,
+            &1_000,
+            &zero_milestones,
+            &ApproverConfig::Single(c.approver.clone()),
+            &hash(&c.env, 9),
+        )
+        .err()
+        .unwrap();
+    assert_eq!(e, Ok(Error::InvalidAmount));
+
+    // Milestone with negative amount
+    let neg_milestones = vec![
+        &c.env,
+        Milestone {
+            description_hash: hash(&c.env, 1),
+            amount: -100,
+            due_by: 10 * DAY,
+        },
+    ];
+    let e = c
+        .client
+        .try_create_programme(
+            &c.sponsor,
+            &c.implementer,
+            &c.asset,
+            &1_000,
+            &neg_milestones,
+            &ApproverConfig::Single(c.approver.clone()),
+            &hash(&c.env, 9),
+        )
+        .err()
+        .unwrap();
+    assert_eq!(e, Ok(Error::InvalidAmount));
+
+    // Negative fund amount
+    let id = create(&c);
+    let e = c.client.try_fund(&id, &-100).err().unwrap();
+    assert_eq!(e, Ok(Error::InvalidAmount));
+
+    // Negative disburse total
+    c.client.fund(&id, &1_000);
+    c.client.claim(&id, &0, &hash(&c.env, 20));
+    c.client.approve(&id, &0);
+    let e = c
+        .client
+        .try_disburse(&id, &hash(&c.env, 50), &-50, &5)
+        .err()
+        .unwrap();
+    assert_eq!(e, Ok(Error::InvalidBatch));
+}
+
 // --- test-only Merkle helpers -------------------------------------------------
 
 // Build a batch of `n` synthetic leaves whose amounts sum to `total`. Returns
