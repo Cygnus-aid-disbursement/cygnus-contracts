@@ -29,6 +29,8 @@ pub struct MilestoneState {
     // True when the claim landed after due_by. A late claim is flagged, never
     // blocked, because a field office that misses a date has still done the work.
     pub claimed_late: bool,
+    // Distinct approvals recorded for this milestone under panel or oracle approvers.
+    pub approvals: Vec<Address>,
 }
 
 #[contracttype]

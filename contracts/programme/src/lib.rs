@@ -54,6 +54,16 @@ pub struct MilestoneApproved {
 }
 
 #[contractevent]
+pub struct MilestonePanelApproved {
+    #[topic]
+    pub programme_id: u64,
+    pub milestone_index: u32,
+    pub approver: Address,
+    pub approvals_count: u32,
+    pub threshold: u32,
+}
+
+#[contractevent]
 pub struct MilestoneRejected {
     #[topic]
     pub programme_id: u64,
@@ -141,6 +151,23 @@ impl ProgrammeContract {
             }
         }
 
+        match &approver {
+            ApproverConfig::Single(_) | ApproverConfig::Oracle(_) => {}
+            ApproverConfig::Panel(members, threshold) => {
+                if *threshold == 0 || *threshold > members.len() || members.is_empty() {
+                    return Err(Error::InvalidApproverConfig);
+                }
+                for i in 0..members.len() {
+                    let m_i = members.get_unchecked(i);
+                    for j in (i + 1)..members.len() {
+                        if m_i == members.get_unchecked(j) {
+                            return Err(Error::InvalidApproverConfig);
+                        }
+                    }
+                }
+            }
+        }
+
         let id = env
             .storage()
             .instance()
@@ -160,6 +187,7 @@ impl ProgrammeContract {
                 reason_hash: None,
                 claimed_at: 0,
                 claimed_late: false,
+                approvals: Vec::new(&env),
             });
         }
 
@@ -245,6 +273,7 @@ impl ProgrammeContract {
         st.reason_hash = None;
         st.claimed_at = now;
         st.claimed_late = now > due_by;
+        st.approvals = Vec::new(&env);
         p.milestone_states.set(milestone_index, st.clone());
         save(&env, &p);
 
@@ -259,47 +288,210 @@ impl ProgrammeContract {
     }
 
     /// Approver releases a claimed milestone's budget into the spendable pool.
+    /// Under Single and Oracle approvers, the designated approver is authenticated.
+    /// Under Panel approvers, members must call `approve_by` directly.
     pub fn approve(env: Env, programme_id: u64, milestone_index: u32) -> Result<(), Error> {
+        let p = load(&env, programme_id)?;
+        match &p.approver {
+            ApproverConfig::Single(a) | ApproverConfig::Oracle(a) => {
+                Self::approve_by(env, programme_id, milestone_index, a.clone())
+            }
+            ApproverConfig::Panel(_, _) => Err(Error::NotApprover),
+        }
+    }
+
+    /// Explicit approver releases or votes to release a claimed milestone's budget.
+    /// Under Single and Oracle approvers, `approver` must match the configured address.
+    /// Under Panel approvers, `approver` must be an unrecorded panel member. When
+    /// member approvals reach the threshold, the milestone status becomes Approved
+    /// and the budget is released.
+    pub fn approve_by(
+        env: Env,
+        programme_id: u64,
+        milestone_index: u32,
+        approver: Address,
+    ) -> Result<(), Error> {
         let mut p = load(&env, programme_id)?;
         active(&p)?;
-        approver_single(&p)?.require_auth();
 
-        let mut st = milestone_state(&p, milestone_index)?;
-        resolvable(&st)?;
+        match &p.approver {
+            ApproverConfig::Single(ref single) => {
+                if &approver != single {
+                    return Err(Error::NotApprover);
+                }
+                approver.require_auth();
 
-        let amount = p.milestones.get_unchecked(milestone_index).amount;
-        if p.released + amount > p.funded {
-            return Err(Error::InsufficientFunding);
+                let mut st = milestone_state(&p, milestone_index)?;
+                resolvable(&st)?;
+
+                let amount = p.milestones.get_unchecked(milestone_index).amount;
+                if p.released + amount > p.funded {
+                    return Err(Error::InsufficientFunding);
+                }
+                p.released += amount;
+                st.status = MilestoneStatus::Approved;
+                st.approvals.push_back(approver);
+                p.milestone_states.set(milestone_index, st);
+                save(&env, &p);
+
+                MilestoneApproved {
+                    programme_id,
+                    milestone_index,
+                }
+                .publish(&env);
+                Ok(())
+            }
+            ApproverConfig::Oracle(ref oracle) => {
+                if &approver != oracle {
+                    return Err(Error::NotApprover);
+                }
+                approver.require_auth();
+
+                let mut st = milestone_state(&p, milestone_index)?;
+                resolvable(&st)?;
+
+                let amount = p.milestones.get_unchecked(milestone_index).amount;
+                if p.released + amount > p.funded {
+                    return Err(Error::InsufficientFunding);
+                }
+                p.released += amount;
+                st.status = MilestoneStatus::Approved;
+                st.approvals.push_back(approver);
+                p.milestone_states.set(milestone_index, st);
+                save(&env, &p);
+
+                MilestoneApproved {
+                    programme_id,
+                    milestone_index,
+                }
+                .publish(&env);
+                Ok(())
+            }
+            ApproverConfig::Panel(ref members, threshold) => {
+                let mut is_member = false;
+                for m in members.iter() {
+                    if m == approver {
+                        is_member = true;
+                        break;
+                    }
+                }
+                if !is_member {
+                    return Err(Error::NotApprover);
+                }
+                approver.require_auth();
+
+                let mut st = milestone_state(&p, milestone_index)?;
+                resolvable(&st)?;
+
+                for existing in st.approvals.iter() {
+                    if existing == approver {
+                        return Err(Error::AlreadyApprovedByMember);
+                    }
+                }
+
+                st.approvals.push_back(approver.clone());
+                let approvals_count = st.approvals.len();
+
+                MilestonePanelApproved {
+                    programme_id,
+                    milestone_index,
+                    approver,
+                    approvals_count,
+                    threshold: *threshold,
+                }
+                .publish(&env);
+
+                if approvals_count >= *threshold {
+                    let amount = p.milestones.get_unchecked(milestone_index).amount;
+                    if p.released + amount > p.funded {
+                        return Err(Error::InsufficientFunding);
+                    }
+                    p.released += amount;
+                    st.status = MilestoneStatus::Approved;
+                    p.milestone_states.set(milestone_index, st);
+                    save(&env, &p);
+
+                    MilestoneApproved {
+                        programme_id,
+                        milestone_index,
+                    }
+                    .publish(&env);
+                } else {
+                    p.milestone_states.set(milestone_index, st);
+                    save(&env, &p);
+                }
+
+                Ok(())
+            }
         }
-        p.released += amount;
-        st.status = MilestoneStatus::Approved;
-        p.milestone_states.set(milestone_index, st);
-        save(&env, &p);
-
-        MilestoneApproved {
-            programme_id,
-            milestone_index,
-        }
-        .publish(&env);
-        Ok(())
     }
 
     /// Approver rejects a claimed milestone with a reason hash. The budget is
     /// not released; the implementer may re-claim.
+    /// Under Single and Oracle approvers, the designated approver is authenticated.
+    /// Under Panel approvers, members must call `reject_by` directly.
     pub fn reject(
         env: Env,
         programme_id: u64,
         milestone_index: u32,
         reason_hash: BytesN<32>,
     ) -> Result<(), Error> {
+        let p = load(&env, programme_id)?;
+        match &p.approver {
+            ApproverConfig::Single(a) | ApproverConfig::Oracle(a) => {
+                Self::reject_by(env, programme_id, milestone_index, a.clone(), reason_hash)
+            }
+            ApproverConfig::Panel(_, _) => Err(Error::NotApprover),
+        }
+    }
+
+    /// Explicit approver rejects a claimed milestone with a reason hash.
+    /// Under Single and Oracle approvers, `approver` must match the configured address.
+    /// Under Panel approvers, any member may reject the claim, clearing any accumulated
+    /// approvals and transitioning the milestone to Rejected.
+    pub fn reject_by(
+        env: Env,
+        programme_id: u64,
+        milestone_index: u32,
+        approver: Address,
+        reason_hash: BytesN<32>,
+    ) -> Result<(), Error> {
         let mut p = load(&env, programme_id)?;
         active(&p)?;
-        approver_single(&p)?.require_auth();
+
+        match &p.approver {
+            ApproverConfig::Single(ref single) => {
+                if &approver != single {
+                    return Err(Error::NotApprover);
+                }
+                approver.require_auth();
+            }
+            ApproverConfig::Oracle(ref oracle) => {
+                if &approver != oracle {
+                    return Err(Error::NotApprover);
+                }
+                approver.require_auth();
+            }
+            ApproverConfig::Panel(ref members, _) => {
+                let mut is_member = false;
+                for m in members.iter() {
+                    if m == approver {
+                        is_member = true;
+                        break;
+                    }
+                }
+                if !is_member {
+                    return Err(Error::NotApprover);
+                }
+                approver.require_auth();
+            }
+        }
 
         let mut st = milestone_state(&p, milestone_index)?;
         resolvable(&st)?;
         st.status = MilestoneStatus::Rejected;
         st.reason_hash = Some(reason_hash.clone());
+        st.approvals = Vec::new(&env);
         p.milestone_states.set(milestone_index, st);
         save(&env, &p);
 
@@ -513,13 +705,6 @@ fn resolvable(st: &MilestoneState) -> Result<(), Error> {
         MilestoneStatus::Claimed => Ok(()),
         MilestoneStatus::Pending => Err(Error::MilestoneNotClaimed),
         _ => Err(Error::MilestoneAlreadyResolved),
-    }
-}
-
-fn approver_single(p: &Programme) -> Result<Address, Error> {
-    match &p.approver {
-        ApproverConfig::Single(a) => Ok(a.clone()),
-        _ => Err(Error::ApproverKindUnimplemented),
     }
 }
 
