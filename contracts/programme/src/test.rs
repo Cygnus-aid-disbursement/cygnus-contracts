@@ -712,10 +712,13 @@ fn claim_before_funding_and_approve_after_funding() {
 
 // --- test-only Merkle helpers -------------------------------------------------
 
-// Build a batch of `n` synthetic leaves whose amounts sum to `total`. Returns
-// (root, leaves, total, count). recipient_ref stands in for a salted hash.
-fn build_batch(env: &Env, n: u32, seed: u8) -> (BytesN<32>, Vec<BytesN<32>>, i128, u32) {
-    let per: i128 = if n == 50 { 12 } else { 10 };
+// Build a batch of `n` synthetic leaves with a specified amount per leaf.
+fn build_batch_with_amount(
+    env: &Env,
+    n: u32,
+    seed: u8,
+    per: i128,
+) -> (BytesN<32>, Vec<BytesN<32>>, i128, u32) {
     let mut leaves = Vec::new(env);
     let mut total: i128 = 0;
     for i in 0..n {
@@ -729,6 +732,13 @@ fn build_batch(env: &Env, n: u32, seed: u8) -> (BytesN<32>, Vec<BytesN<32>>, i12
     }
     let root = merkle::compute_root(env, &leaves);
     (root, leaves, total, n)
+}
+
+// Build a batch of `n` synthetic leaves whose amounts sum to `total`. Returns
+// (root, leaves, total, count). recipient_ref stands in for a salted hash.
+fn build_batch(env: &Env, n: u32, seed: u8) -> (BytesN<32>, Vec<BytesN<32>>, i128, u32) {
+    let per: i128 = if n == 50 { 12 } else { 10 };
+    build_batch_with_amount(env, n, seed, per)
 }
 
 // Sibling path for leaf `index`, matching compute_root: pairs are (2k, 2k+1)
