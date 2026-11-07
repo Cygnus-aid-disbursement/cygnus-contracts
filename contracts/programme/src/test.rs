@@ -473,6 +473,83 @@ fn three_balance_invariant_holds_at_each_transition() {
 }
 
 #[test]
+fn unauthorized_signers_rejected_on_all_endpoints() {
+    let c = setup();
+    let id = create(&c);
+    c.client.fund(&id, &1_000);
+    c.client.claim(&id, &0, &hash(&c.env, 20));
+
+    let stranger = Address::generate(&c.env);
+
+    // Stranger attempting to approve fails
+    let res = c
+        .client
+        .mock_auths(&[MockAuth {
+            address: &stranger,
+            invoke: &MockAuthInvoke {
+                contract: &c.contract_id,
+                fn_name: "approve",
+                args: (id, 0u32).into_val(&c.env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_approve(&id, &0);
+    assert!(res.is_err());
+
+    // Stranger attempting to reject fails
+    let res = c
+        .client
+        .mock_auths(&[MockAuth {
+            address: &stranger,
+            invoke: &MockAuthInvoke {
+                contract: &c.contract_id,
+                fn_name: "reject",
+                args: (id, 0u32, hash(&c.env, 99)).into_val(&c.env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_reject(&id, &0, &hash(&c.env, 99));
+    assert!(res.is_err());
+
+    // Approve properly so we can test disburse
+    c.client.approve(&id, &0);
+
+    // Stranger attempting to disburse fails
+    let (root, _, total, count) = build_batch_with_amount(&c.env, 5, 1, 10);
+    let res = c
+        .client
+        .mock_auths(&[MockAuth {
+            address: &stranger,
+            invoke: &MockAuthInvoke {
+                contract: &c.contract_id,
+                fn_name: "disburse",
+                args: (id, root.clone(), total, count).into_val(&c.env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_disburse(&id, &root, &total, &count);
+    assert!(res.is_err());
+
+    // Fast-forward past end_by for refund test
+    c.env.ledger().with_mut(|l| l.timestamp = 25 * DAY);
+
+    // Stranger attempting to refund fails
+    let res = c
+        .client
+        .mock_auths(&[MockAuth {
+            address: &stranger,
+            invoke: &MockAuthInvoke {
+                contract: &c.contract_id,
+                fn_name: "refund_remainder",
+                args: (id,).into_val(&c.env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_refund_remainder(&id);
+    assert!(res.is_err());
+}
+
+#[test]
 fn panel_and_oracle_approvers_unimplemented() {
     let c = setup();
     let panel = c.client.try_create_programme(
