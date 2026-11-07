@@ -433,6 +433,48 @@ fn single_leaf_batch_verification_on_chain() {
 }
 
 #[test]
+fn merkle_odd_counts_and_sibling_ordering() {
+    let env = Env::default();
+
+    // Verify all odd leaf counts up to 33 carry up tail without duplication
+    for n in [3u32, 5, 7, 9, 13, 17, 33] {
+        let (root, leaves, _, _) = build_batch(&env, n, 42);
+        for i in 0..leaves.len() {
+            let leaf = leaves.get_unchecked(i);
+            let proof = merkle_proof(&env, &leaves, i);
+            assert!(
+                merkle::verify(&env, &leaf, &proof, &root),
+                "leaf {i} of {n} failed"
+            );
+
+            // If proof has at least 2 siblings, swapping them must fail verification
+            if proof.len() >= 2 {
+                let mut swapped_proof = proof.clone();
+                let s0 = swapped_proof.get_unchecked(0);
+                let s1 = swapped_proof.get_unchecked(1);
+                swapped_proof.set(0, s1);
+                swapped_proof.set(1, s0);
+                assert!(
+                    !merkle::verify(&env, &leaf, &swapped_proof, &root),
+                    "swapped siblings unexpectedly verified for leaf {i} of {n}"
+                );
+            }
+
+            // Tampering with the first sibling must fail verification
+            if proof.len() > 0 {
+                let mut tampered_proof = proof.clone();
+                let bad_sibling = hash(&env, 254);
+                tampered_proof.set(0, bad_sibling);
+                assert!(
+                    !merkle::verify(&env, &leaf, &tampered_proof, &root),
+                    "tampered sibling unexpectedly verified for leaf {i} of {n}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn views_and_hash_leaf() {
     let c = setup();
     let id = create(&c);
