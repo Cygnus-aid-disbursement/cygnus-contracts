@@ -8,11 +8,11 @@ auditable without publishing who the beneficiaries are.
 
 This is the protocol repository, the first of three:
 
-- **cygnus-contracts** (here) — the Rust contract, deployment truth, and the
+- **cygnus-contracts** (here) â€” the Rust contract, deployment truth, and the
   protocol specification.
-- [cygnus-sdk](https://github.com/Cygnus-aid-disbursement/cygnus-sdk) — the
+- [cygnus-sdk](https://github.com/Cygnus-aid-disbursement/cygnus-sdk) â€” the
   TypeScript client, Merkle batch construction, and hashing conventions.
-- [cygnus-app](https://github.com/Cygnus-aid-disbursement/cygnus-app) — the
+- [cygnus-app](https://github.com/Cygnus-aid-disbursement/cygnus-app) â€” the
   public dashboard and implementer console.
 
 Dependencies point one way: contracts, then SDK, then app. See
@@ -51,19 +51,18 @@ move real value.
 
 Deployed Testnet contract id: `CBN6MNOWZISG6EXVCUQSGKASFSIBVDBZSVASI6FZYBLBMLHMQWL6SAL7`.
 
-What works today: the full single-approver lifecycle. A sponsor creates and funds
-a programme, an implementer claims a milestone, a single named approver approves
-or rejects it, the implementer disburses a batch as a Merkle root with a total
-and a count, anyone can verify an inclusion proof against the on-chain root, and
-the sponsor refunds the remainder after the end date. This path is covered by
-unit tests and by a Testnet run reproduced below.
+What works today: the single-approver lifecycle, granular queries, and safety controls.
+A sponsor creates and funds a programme (or cancels an unfunded programme via `cancel_programme`),
+an implementer claims against milestones, a single named approver approves or rejects each milestone,
+the implementer disburses batches as Merkle roots bounded by `MAX_BATCHES`, anyone can query single
+milestones (`get_milestone`) or verify inclusion proofs against on-chain roots, and the sponsor refunds
+the remainder after the end date. Storage growth is capped by `MAX_MILESTONES` and `MAX_BATCHES`.
+All paths are covered by unit tests and verified against Testnet.
 
 What does not work yet: the panel approver (`ApproverConfig::Panel`) and the
 oracle approver (`ApproverConfig::Oracle`) are declared in the type but return
-`ApproverKindUnimplemented`; only `ApproverConfig::Single` is live. There are no
-per-programme caps on milestone or batch counts, no `cancel_programme` for a
-zero-funded programme, and no independent review of the balance invariants or the
-privacy properties. These gaps are tracked as GitHub issues.
+`ApproverKindUnimplemented`; only `ApproverConfig::Single` is live. These gaps
+are tracked as GitHub issues.
 
 ## Layout
 
