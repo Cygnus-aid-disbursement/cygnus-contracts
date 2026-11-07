@@ -354,32 +354,57 @@ fn multi_cycle_claim_reject_resubmission() {
 
     // Cycle 1: claim then reject
     c.client.claim(&id, &0, &ev1);
-    let st = c.client.get_programme(&id).unwrap().milestone_states.get_unchecked(0);
+    let st = c
+        .client
+        .get_programme(&id)
+        .unwrap()
+        .milestone_states
+        .get_unchecked(0);
     assert_eq!(st.status, MilestoneStatus::Claimed);
     assert_eq!(st.evidence_hash, Some(ev1));
     assert_eq!(st.reason_hash, None);
 
     c.client.reject(&id, &0, &rz1);
-    let st = c.client.get_programme(&id).unwrap().milestone_states.get_unchecked(0);
+    let st = c
+        .client
+        .get_programme(&id)
+        .unwrap()
+        .milestone_states
+        .get_unchecked(0);
     assert_eq!(st.status, MilestoneStatus::Rejected);
     assert_eq!(st.reason_hash, Some(rz1));
 
     // Cycle 2: re-claim with new evidence, reason_hash reset to None
     c.client.claim(&id, &0, &ev2);
-    let st = c.client.get_programme(&id).unwrap().milestone_states.get_unchecked(0);
+    let st = c
+        .client
+        .get_programme(&id)
+        .unwrap()
+        .milestone_states
+        .get_unchecked(0);
     assert_eq!(st.status, MilestoneStatus::Claimed);
     assert_eq!(st.evidence_hash, Some(ev2));
     assert_eq!(st.reason_hash, None);
 
     c.client.reject(&id, &0, &rz2);
-    let st = c.client.get_programme(&id).unwrap().milestone_states.get_unchecked(0);
+    let st = c
+        .client
+        .get_programme(&id)
+        .unwrap()
+        .milestone_states
+        .get_unchecked(0);
     assert_eq!(st.status, MilestoneStatus::Rejected);
     assert_eq!(st.reason_hash, Some(rz2));
 
     // Cycle 3: re-claim and finally approve
     c.client.claim(&id, &0, &ev3);
     c.client.approve(&id, &0);
-    let st = c.client.get_programme(&id).unwrap().milestone_states.get_unchecked(0);
+    let st = c
+        .client
+        .get_programme(&id)
+        .unwrap()
+        .milestone_states
+        .get_unchecked(0);
     assert_eq!(st.status, MilestoneStatus::Approved);
     assert_eq!(st.evidence_hash, Some(ev3));
     assert_eq!(c.client.get_programme(&id).unwrap().released, 600);
@@ -752,7 +777,7 @@ fn merkle_odd_counts_and_sibling_ordering() {
             }
 
             // Tampering with the first sibling must fail verification
-            if proof.len() > 0 {
+            if !proof.is_empty() {
                 let mut tampered_proof = proof.clone();
                 let bad_sibling = hash(&env, 254);
                 tampered_proof.set(0, bad_sibling);
