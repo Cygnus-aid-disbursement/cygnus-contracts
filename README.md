@@ -51,18 +51,14 @@ move real value.
 
 Deployed Testnet contract id: `CBN6MNOWZISG6EXVCUQSGKASFSIBVDBZSVASI6FZYBLBMLHMQWL6SAL7`.
 
-What works today: the single-approver lifecycle, granular queries, and safety controls.
+What works today: the complete multi-approver lifecycle, granular queries, and safety controls.
 A sponsor creates and funds a programme (or cancels an unfunded programme via `cancel_programme`),
-an implementer claims against milestones, a single named approver approves or rejects each milestone,
-the implementer disburses batches as Merkle roots bounded by `MAX_BATCHES`, anyone can query single
+an implementer claims against milestones, and approvers release milestone budgets under either single,
+threshold panel (`ApproverConfig::Panel`), or oracle (`ApproverConfig::Oracle`) configurations.
+The implementer disburses batches as Merkle roots bounded by `MAX_BATCHES`, anyone can query single
 milestones (`get_milestone`) or verify inclusion proofs against on-chain roots, and the sponsor refunds
-the remainder after the end date. Storage growth is capped by `MAX_MILESTONES` and `MAX_BATCHES`.
-All paths are covered by unit tests and verified against Testnet.
-
-What does not work yet: the panel approver (`ApproverConfig::Panel`) and the
-oracle approver (`ApproverConfig::Oracle`) are declared in the type but return
-`ApproverKindUnimplemented`; only `ApproverConfig::Single` is live. These gaps
-are tracked as GitHub issues.
+the remainder after the end date. Storage growth is capped by `MAX_MILESTONES` (25) and `MAX_BATCHES` (1,000).
+All paths are covered by comprehensive unit tests and verified against Testnet.
 
 ## Layout
 

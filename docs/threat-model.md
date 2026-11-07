@@ -27,11 +27,13 @@ colluding approver can release a milestone that was not genuinely met.
 The contract limits the damage rather than preventing it: funds can only reach an
 implementer address the sponsor agreed to at creation, every approval is public
 with its evidence hash, and released funds still cannot exceed what was funded.
-The stronger mitigations, panel and oracle approvers with a threshold, are
-declared in `ApproverConfig` but not built at the 65% line; only the `Single`
-approver is active, and the others return `ApproverKindUnimplemented`. A
-single-approver programme carries exactly the trust its sponsor placed in that
-one approver.
+To mitigate approver capture, `ApproverConfig` supports multi-party threshold panels
+(`Panel(Vec<Address>, u32)`) and external oracles (`Oracle(Address)`). Under a threshold panel,
+an M-of-N threshold of distinct designated members must independently vote via `approve_by`
+before budget is released. Any panel member may reject a claim via `reject_by`, clearing
+pending approvals and returning the milestone to `Rejected`. A single-approver programme
+carries exactly the trust its sponsor placed in that one approver, whereas a threshold panel
+distributes trust across independent reviewers.
 
 ## Dishonest implementer
 
