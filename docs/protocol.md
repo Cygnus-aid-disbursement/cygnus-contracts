@@ -7,19 +7,22 @@ and the contract's own tests decide.
 
 ## 1. Actors
 
-- **Sponsor** Ã¢â‚¬â€ funds the programme and recovers any remainder after the end
-  date. Authorises `create_programme`, `fund` and `refund_remainder`.
-- **Implementer** Ã¢â‚¬â€ the NGO or field office. Authorises `claim` and `disburse`.
-- **Approver** Ã¢â‚¬â€ releases a claimed milestone's budget. At the 65% line only the
-  `Single` approver is built. Authorises `approve` and `reject`.
+- **Sponsor** — funds the programme and recovers any remainder after the end
+  date. Authorises `create_programme`, `fund`, `cancel_programme`, and `refund_remainder`.
+- **Implementer** — the NGO or field office. Authorises `claim` and `disburse`.
+- **Approver** — releases a claimed milestone's budget. Supports three configurations:
+  - `Single(Address)`: a single authority approves or rejects. Authorises `approve` / `approve_by` and `reject` / `reject_by`.
+  - `Panel(Vec<Address>, u32)`: an M-of-N threshold panel of distinct members. Members vote via `approve_by`. Reaching `threshold` approves the milestone and releases its budget. Any member may call `reject_by` with a reason hash to reject and clear accumulated approvals.
+  - `Oracle(Address)`: an automated or external oracle address. Authorises `approve` / `approve_by` and `reject` / `reject_by`.
 
 There is no platform account. Funds sit in the contract under the programme's own
 rules and move only on the calls below.
 
 ## 2. Programme lifecycle
 
-A programme is `Active` from creation until the sponsor refunds the remainder,
-after which it is `Closed` and rejects every state-changing call.
+A programme is `Active` from creation until cancelled (if unfunded) or until the
+sponsor refunds the remainder after the end date, after which it is `Closed` and
+rejects every state-changing call.
 
 ```
 create_programme -> Active
@@ -30,12 +33,12 @@ Active --refund_remainder (after end date)--> Closed
 Each milestone carries its own status, independent of the others:
 
 ```
-Pending --claim--> Claimed --approve--> Approved
-                   Claimed --reject--> Rejected --claim--> Claimed
+Pending --claim--> Claimed --approve / approve_by (reaches threshold)--> Approved
+                   Claimed --reject / reject_by--> Rejected --claim--> Claimed
 ```
 
-`Approved` is terminal. `Rejected` returns to `Claimed` on a fresh claim, so an
-implementer can fix evidence and resubmit.
+`Approved` is terminal. `Rejected` returns to `Claimed` on a fresh claim (which also
+resets any pending approvals), so an implementer can fix evidence and resubmit.
 
 ## 3. Transitions
 
@@ -44,11 +47,13 @@ contract enforces. A violated precondition returns the error in section 6.
 
 | Call | Actor | Precondition |
 |---|---|---|
-| `create_programme` | sponsor | `total > 0`; `0 < count <= MAX_MILESTONES (25)`; every milestone `amount > 0` |
+| `create_programme` | sponsor | `total > 0`; `0 < count <= MAX_MILESTONES (25)`; every milestone `amount > 0`; valid `ApproverConfig` |
 | `fund` | sponsor | programme `Active`; `amount > 0` |
 | `claim` | implementer | programme `Active`; milestone `Pending` or `Rejected` |
-| `approve` | approver | programme `Active`; milestone `Claimed`; `released + amount <= funded` |
-| `reject` | approver | programme `Active`; milestone `Claimed` |
+| `approve` | approver | programme `Active`; milestone `Claimed`; single or oracle approver; `released + amount <= funded` |
+| `approve_by` | approver / member | programme `Active`; milestone `Claimed`; caller is authorized single, oracle, or unrecorded panel member; if threshold met, `released + amount <= funded` |
+| `reject` | approver | programme `Active`; milestone `Claimed`; single or oracle approver |
+| `reject_by` | approver / member | programme `Active`; milestone `Claimed`; caller is authorized single, oracle, or panel member |
 | `disburse` | implementer | programme `Active`; `total > 0`; `count > 0`; `batch_count < MAX_BATCHES (1000)`; `disbursed + total <= released` |
 | `cancel_programme` | sponsor | programme `Active`; `funded == 0` |
 | `refund_remainder` | sponsor | programme `Active`; `now > end_by`; `funded - disbursed > 0` |
@@ -63,10 +68,10 @@ hash; the description itself stays off chain.
 
 Three running balances govern the money:
 
-- `funded` Ã¢â‚¬â€ total received through `fund`.
-- `released` Ã¢â‚¬â€ sum of approved milestone amounts. `approve` moves a milestone's
+- `funded` — total received through `fund`.
+- `released` — sum of approved milestone amounts. `approve` or threshold `approve_by` moves a milestone's
   budget from merely funded to spendable.
-- `disbursed` Ã¢â‚¬â€ sum of batch totals paid out through `disburse`.
+- `disbursed` — sum of batch totals paid out through `disburse`.
 
 The invariant `disbursed <= released <= funded` holds at all times. A claim after
 `due_by` sets `claimed_late = true` on the milestone; it is recorded, never
@@ -139,13 +144,16 @@ external auditor can confirm they reproduce the leaf encoding exactly.
 | 9 | `NotEnded` | refund before `end_by` |
 | 10 | `InvalidAmount` | non-positive total or milestone amount |
 | 11 | `InvalidBatch` | disburse with non-positive total or zero count |
-| 12 | `ApproverKindUnimplemented` | approve/reject under a `Panel` or `Oracle` approver |
+| 12 | `ApproverKindUnimplemented` | reserved error code |
 | 13 | `NothingToRefund` | refund when `funded - disbursed` is zero |
 | 14 | `BatchIndexOutOfRange` | reserved for callers that index batches directly |
 | 15 | `TooManyMilestones` | milestone count exceeds `MAX_MILESTONES (25)` |
 | 16 | `TooManyBatches` | batch count reaches `MAX_BATCHES (1000)` |
 | 17 | `EmptyMilestones` | milestone list is empty |
 | 18 | `FundingAlreadyReceived` | cancel when `funded > 0` |
+| 19 | `AlreadyApprovedByMember` | member has already approved this milestone |
+| 20 | `NotApprover` | caller is not an authorized approver or panel member |
+| 21 | `InvalidApproverConfig` | panel threshold is 0, exceeds members count, or duplicate members |
 
 ## 7. Events
 
@@ -160,6 +168,7 @@ remaining fields are event data.
 | `ProgrammeFunded` | `programme_id` | `amount` |
 | `MilestoneClaimed` | `programme_id` | `milestone_index, evidence_hash, claimed_late` |
 | `MilestoneApproved` | `programme_id` | `milestone_index` |
+| `MilestonePanelApproved` | `programme_id` | `milestone_index, approver, approvals_count, threshold` |
 | `MilestoneRejected` | `programme_id` | `milestone_index, reason_hash` |
 | `BatchDisbursed` | `programme_id` | `batch_index, root, total, count` |
 | `ProgrammeCancelled` | `programme_id` | `sponsor` |

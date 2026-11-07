@@ -24,4 +24,7 @@ pub enum Error {
     TooManyBatches = 16,
     EmptyMilestones = 17,
     FundingAlreadyReceived = 18,
+    AlreadyApprovedByMember = 19,
+    NotApprover = 20,
+    InvalidApproverConfig = 21,
 }

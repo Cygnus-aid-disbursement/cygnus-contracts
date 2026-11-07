@@ -575,23 +575,215 @@ fn unauthorized_signers_rejected_on_all_endpoints() {
 }
 
 #[test]
-fn panel_and_oracle_approvers_unimplemented() {
+fn panel_approver_config_validation() {
     let c = setup();
-    let panel = c.client.try_create_programme(
+    let m1 = Address::generate(&c.env);
+    let m2 = Address::generate(&c.env);
+
+    // Zero threshold fails
+    let zero_thresh = c.client.try_create_programme(
         &c.sponsor,
         &c.implementer,
         &c.asset,
         &1_000,
         &milestones(&c.env),
-        &ApproverConfig::Panel(vec![&c.env, c.approver.clone()], 1),
+        &ApproverConfig::Panel(vec![&c.env, m1.clone(), m2.clone()], 0),
         &hash(&c.env, 9),
     );
-    // Creation with a panel config is allowed; acting on it is what fails.
-    let id = panel.unwrap().unwrap();
+    assert_eq!(zero_thresh.err().unwrap(), Ok(Error::InvalidApproverConfig));
+
+    // Threshold exceeding member count fails
+    let excessive_thresh = c.client.try_create_programme(
+        &c.sponsor,
+        &c.implementer,
+        &c.asset,
+        &1_000,
+        &milestones(&c.env),
+        &ApproverConfig::Panel(vec![&c.env, m1.clone(), m2.clone()], 3),
+        &hash(&c.env, 9),
+    );
+    assert_eq!(
+        excessive_thresh.err().unwrap(),
+        Ok(Error::InvalidApproverConfig)
+    );
+
+    // Duplicate members fail
+    let duplicate_members = c.client.try_create_programme(
+        &c.sponsor,
+        &c.implementer,
+        &c.asset,
+        &1_000,
+        &milestones(&c.env),
+        &ApproverConfig::Panel(vec![&c.env, m1.clone(), m1.clone()], 1),
+        &hash(&c.env, 9),
+    );
+    assert_eq!(
+        duplicate_members.err().unwrap(),
+        Ok(Error::InvalidApproverConfig)
+    );
+
+    // Empty panel fails
+    let empty_panel = c.client.try_create_programme(
+        &c.sponsor,
+        &c.implementer,
+        &c.asset,
+        &1_000,
+        &milestones(&c.env),
+        &ApproverConfig::Panel(Vec::new(&c.env), 1),
+        &hash(&c.env, 9),
+    );
+    assert_eq!(empty_panel.err().unwrap(), Ok(Error::InvalidApproverConfig));
+}
+
+#[test]
+fn panel_approver_threshold_progression() {
+    let c = setup();
+    let m1 = Address::generate(&c.env);
+    let m2 = Address::generate(&c.env);
+    let m3 = Address::generate(&c.env);
+    let stranger = Address::generate(&c.env);
+
+    let id = c.client.create_programme(
+        &c.sponsor,
+        &c.implementer,
+        &c.asset,
+        &1_000,
+        &milestones(&c.env),
+        &ApproverConfig::Panel(vec![&c.env, m1.clone(), m2.clone(), m3.clone()], 2),
+        &hash(&c.env, 9),
+    );
     c.client.fund(&id, &1_000);
     c.client.claim(&id, &0, &hash(&c.env, 20));
-    let e = c.client.try_approve(&id, &0).err().unwrap();
-    assert_eq!(e, Ok(Error::ApproverKindUnimplemented));
+
+    // Stranger cannot approve
+    let stranger_res = c.client.try_approve_by(&id, &0, &stranger);
+    assert_eq!(stranger_res.err().unwrap(), Ok(Error::NotApprover));
+
+    // Generic parameterless approve fails for Panel
+    let generic_res = c.client.try_approve(&id, &0);
+    assert_eq!(generic_res.err().unwrap(), Ok(Error::NotApprover));
+
+    // Member 1 approves: 1 of 2 threshold reached
+    c.client.approve_by(&id, &0, &m1);
+    let (_, st) = c.client.get_milestone(&id, &0).unwrap();
+    assert_eq!(st.status, MilestoneStatus::Claimed);
+    assert_eq!(st.approvals.len(), 1);
+    assert_eq!(st.approvals.get(0).unwrap(), m1);
+    assert_eq!(c.client.get_programme(&id).unwrap().released, 0);
+
+    // Member 1 cannot approve a second time
+    let dup_res = c.client.try_approve_by(&id, &0, &m1);
+    assert_eq!(dup_res.err().unwrap(), Ok(Error::AlreadyApprovedByMember));
+
+    // Member 2 approves: threshold 2 reached, milestone Approved, funds released
+    c.client.approve_by(&id, &0, &m2);
+    let (_, st_after) = c.client.get_milestone(&id, &0).unwrap();
+    assert_eq!(st_after.status, MilestoneStatus::Approved);
+    assert_eq!(st_after.approvals.len(), 2);
+    assert_eq!(c.client.get_programme(&id).unwrap().released, 600);
+}
+
+#[test]
+fn panel_approver_rejection_resets_approvals() {
+    let c = setup();
+    let m1 = Address::generate(&c.env);
+    let m2 = Address::generate(&c.env);
+    let stranger = Address::generate(&c.env);
+
+    let id = c.client.create_programme(
+        &c.sponsor,
+        &c.implementer,
+        &c.asset,
+        &1_000,
+        &milestones(&c.env),
+        &ApproverConfig::Panel(vec![&c.env, m1.clone(), m2.clone()], 2),
+        &hash(&c.env, 9),
+    );
+    c.client.fund(&id, &1_000);
+    c.client.claim(&id, &0, &hash(&c.env, 20));
+
+    // Member 1 approves first
+    c.client.approve_by(&id, &0, &m1);
+    let (_, st) = c.client.get_milestone(&id, &0).unwrap();
+    assert_eq!(st.approvals.len(), 1);
+
+    // Stranger cannot reject
+    let stranger_rej = c
+        .client
+        .try_reject_by(&id, &0, &stranger, &hash(&c.env, 99));
+    assert_eq!(stranger_rej.err().unwrap(), Ok(Error::NotApprover));
+
+    // Generic reject fails on panel
+    let generic_rej = c.client.try_reject(&id, &0, &hash(&c.env, 99));
+    assert_eq!(generic_rej.err().unwrap(), Ok(Error::NotApprover));
+
+    // Member 2 rejects: resets approvals, marks status Rejected
+    c.client.reject_by(&id, &0, &m2, &hash(&c.env, 99));
+    let (_, st_rej) = c.client.get_milestone(&id, &0).unwrap();
+    assert_eq!(st_rej.status, MilestoneStatus::Rejected);
+    assert_eq!(st_rej.approvals.len(), 0);
+    assert_eq!(st_rej.reason_hash, Some(hash(&c.env, 99)));
+
+    // Re-claiming allows re-approval cycle
+    c.client.claim(&id, &0, &hash(&c.env, 21));
+    let (_, st_reclaimed) = c.client.get_milestone(&id, &0).unwrap();
+    assert_eq!(st_reclaimed.status, MilestoneStatus::Claimed);
+    assert_eq!(st_reclaimed.approvals.len(), 0);
+
+    // Now member 1 and member 2 can approve fresh
+    c.client.approve_by(&id, &0, &m1);
+    c.client.approve_by(&id, &0, &m2);
+    let (_, st_approved) = c.client.get_milestone(&id, &0).unwrap();
+    assert_eq!(st_approved.status, MilestoneStatus::Approved);
+    assert_eq!(c.client.get_programme(&id).unwrap().released, 600);
+}
+
+#[test]
+fn oracle_approver_lifecycle() {
+    let c = setup();
+    let oracle = Address::generate(&c.env);
+    let stranger = Address::generate(&c.env);
+
+    let id = c.client.create_programme(
+        &c.sponsor,
+        &c.implementer,
+        &c.asset,
+        &1_000,
+        &milestones(&c.env),
+        &ApproverConfig::Oracle(oracle.clone()),
+        &hash(&c.env, 9),
+    );
+    c.client.fund(&id, &1_000);
+    c.client.claim(&id, &0, &hash(&c.env, 20));
+
+    // Stranger cannot approve
+    let stranger_res = c.client.try_approve_by(&id, &0, &stranger);
+    assert_eq!(stranger_res.err().unwrap(), Ok(Error::NotApprover));
+
+    // Stranger cannot reject
+    let stranger_rej = c
+        .client
+        .try_reject_by(&id, &0, &stranger, &hash(&c.env, 30));
+    assert_eq!(stranger_rej.err().unwrap(), Ok(Error::NotApprover));
+
+    // Calling approve directly works for Oracle (authenticates oracle address)
+    c.client.approve(&id, &0);
+    let (_, st) = c.client.get_milestone(&id, &0).unwrap();
+    assert_eq!(st.status, MilestoneStatus::Approved);
+    assert_eq!(c.client.get_programme(&id).unwrap().released, 600);
+
+    // Second milestone test with approve_by and reject_by
+    c.client.claim(&id, &1, &hash(&c.env, 21));
+    c.client.reject_by(&id, &1, &oracle, &hash(&c.env, 40));
+    let (_, st1) = c.client.get_milestone(&id, &1).unwrap();
+    assert_eq!(st1.status, MilestoneStatus::Rejected);
+
+    // Re-claim and approve_by with oracle
+    c.client.claim(&id, &1, &hash(&c.env, 22));
+    c.client.approve_by(&id, &1, &oracle);
+    let (_, st1_app) = c.client.get_milestone(&id, &1).unwrap();
+    assert_eq!(st1_app.status, MilestoneStatus::Approved);
+    assert_eq!(c.client.get_programme(&id).unwrap().released, 1_000);
 }
 
 #[test]
@@ -1282,6 +1474,80 @@ fn claim_before_funding_and_approve_after_funding() {
         p.milestone_states.get_unchecked(0).status,
         MilestoneStatus::Approved
     );
+}
+
+#[test]
+fn panel_approval_funding_shortfall_blocks_resolution_until_funded() {
+    let c = setup();
+    let m1 = Address::generate(&c.env);
+    let m2 = Address::generate(&c.env);
+
+    let id = c.client.create_programme(
+        &c.sponsor,
+        &c.implementer,
+        &c.asset,
+        &1_000,
+        &milestones(&c.env),
+        &ApproverConfig::Panel(vec![&c.env, m1.clone(), m2.clone()], 2),
+        &hash(&c.env, 9),
+    );
+
+    // Partially fund 400 (milestone 0 requires 600)
+    c.client.fund(&id, &400);
+    c.client.claim(&id, &0, &hash(&c.env, 20));
+
+    // Member 1 approves: 1 of 2 threshold recorded
+    c.client.approve_by(&id, &0, &m1);
+
+    // Member 2 approves: threshold 2 is met, but released(0) + amount(600) > funded(400)
+    // Transaction reverts with InsufficientFunding
+    let res = c.client.try_approve_by(&id, &0, &m2);
+    assert_eq!(res.err().unwrap(), Ok(Error::InsufficientFunding));
+
+    // Sponsor funds remaining 600 (now funded is 1,000)
+    c.client.fund(&id, &600);
+
+    // Member 2 can now approve and threshold completes successfully
+    c.client.approve_by(&id, &0, &m2);
+    let p = c.client.get_programme(&id).unwrap();
+    assert_eq!(p.released, 600);
+    assert_eq!(
+        p.milestone_states.get_unchecked(0).status,
+        MilestoneStatus::Approved
+    );
+}
+
+#[test]
+fn oracle_approve_requires_oracle_auth() {
+    let c = setup();
+    let oracle = Address::generate(&c.env);
+
+    let id = c.client.create_programme(
+        &c.sponsor,
+        &c.implementer,
+        &c.asset,
+        &1_000,
+        &milestones(&c.env),
+        &ApproverConfig::Oracle(oracle.clone()),
+        &hash(&c.env, 9),
+    );
+    c.client.fund(&id, &1_000);
+    c.client.claim(&id, &0, &hash(&c.env, 20));
+
+    // Use MockAuth to verify that oracle authorization is checked
+    c.env.mock_auths(&[MockAuth {
+        address: &oracle,
+        invoke: &MockAuthInvoke {
+            contract: &c.contract_id,
+            fn_name: "approve_by",
+            args: (&id, &0u32, &oracle).into_val(&c.env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    c.client.approve_by(&id, &0, &oracle);
+    let p = c.client.get_programme(&id).unwrap();
+    assert_eq!(p.released, 600);
 }
 
 // --- test-only Merkle helpers -------------------------------------------------
