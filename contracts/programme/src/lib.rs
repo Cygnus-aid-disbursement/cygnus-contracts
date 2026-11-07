@@ -79,7 +79,7 @@ pub struct ProgrammeRefunded {
 }
 
 #[contracttype]
-enum DataKey {
+pub(crate) enum DataKey {
     // Monotonic programme id counter.
     Counter,
     Programme(u64),
@@ -91,6 +91,11 @@ enum DataKey {
 const LEDGERS_PER_DAY: u32 = 17_280;
 const BUMP_THRESHOLD: u32 = LEDGERS_PER_DAY * 30;
 const BUMP_TO: u32 = LEDGERS_PER_DAY * 120;
+
+/// Maximum number of milestones permitted per programme to bound persistent storage.
+pub const MAX_MILESTONES: u32 = 25;
+/// Maximum number of disbursement batches permitted per programme.
+pub const MAX_BATCHES: u32 = 1_000;
 
 #[contract]
 pub struct ProgrammeContract;
@@ -116,6 +121,12 @@ impl ProgrammeContract {
 
         if total <= 0 {
             return Err(Error::InvalidAmount);
+        }
+        if milestones.is_empty() {
+            return Err(Error::EmptyMilestones);
+        }
+        if milestones.len() > MAX_MILESTONES {
+            return Err(Error::TooManyMilestones);
         }
         for m in milestones.iter() {
             if m.amount <= 0 {
@@ -310,6 +321,9 @@ impl ProgrammeContract {
 
         if total <= 0 || count == 0 {
             return Err(Error::InvalidBatch);
+        }
+        if p.batch_count >= MAX_BATCHES {
+            return Err(Error::TooManyBatches);
         }
         if p.disbursed + total > p.released {
             return Err(Error::InsufficientReleased);
