@@ -270,6 +270,55 @@ fn on_time_claim_not_flagged() {
 }
 
 #[test]
+fn claim_timestamp_due_by_boundary() {
+    let c = setup();
+    let id = create(&c);
+    c.client.fund(&id, &1_000);
+
+    let due0 = c
+        .client
+        .get_programme(&id)
+        .unwrap()
+        .milestones
+        .get_unchecked(0)
+        .due_by;
+    assert_eq!(due0, 10 * DAY);
+
+    // Exactly at due_by (due0) should not be flagged late
+    c.env.ledger().with_mut(|l| l.timestamp = due0);
+    c.client.claim(&id, &0, &hash(&c.env, 10));
+    let st0 = c
+        .client
+        .get_programme(&id)
+        .unwrap()
+        .milestone_states
+        .get_unchecked(0);
+    assert_eq!(st0.status, MilestoneStatus::Claimed);
+    assert!(!st0.claimed_late);
+
+    // 1 second past due_by (due1 + 1) must be flagged late
+    let due1 = c
+        .client
+        .get_programme(&id)
+        .unwrap()
+        .milestones
+        .get_unchecked(1)
+        .due_by;
+    assert_eq!(due1, 20 * DAY);
+
+    c.env.ledger().with_mut(|l| l.timestamp = due1 + 1);
+    c.client.claim(&id, &1, &hash(&c.env, 20));
+    let st1 = c
+        .client
+        .get_programme(&id)
+        .unwrap()
+        .milestone_states
+        .get_unchecked(1);
+    assert_eq!(st1.status, MilestoneStatus::Claimed);
+    assert!(st1.claimed_late);
+}
+
+#[test]
 fn reject_then_reclaim() {
     let c = setup();
     let id = create(&c);
