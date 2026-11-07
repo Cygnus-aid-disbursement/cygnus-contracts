@@ -99,8 +99,8 @@ pub struct ProgrammeContract;
 impl ProgrammeContract {
     /// Register a programme. Returns its id. The sponsor authorises creation so
     /// nobody can bind another account as the funder of a programme.
-    // The argument list mirrors PRD section 4.1 exactly; a builder would hide
-    // the contract's real interface from generated bindings.
+    // The argument list mirrors docs/protocol.md section 3 exactly; a builder
+    // would hide the contract's real interface from generated bindings.
     #[allow(clippy::too_many_arguments)]
     pub fn create_programme(
         env: Env,
