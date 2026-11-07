@@ -204,6 +204,39 @@ fn refund_before_end_fails_after_end_succeeds() {
 }
 
 #[test]
+fn refund_remainder_exact_boundary() {
+    let c = setup();
+    let id = create(&c);
+    c.client.fund(&id, &1_000);
+
+    let end_by = c.client.get_programme(&id).unwrap().end_by;
+    assert_eq!(end_by, 20 * DAY);
+
+    // 1 second before end_by must fail
+    c.env.ledger().with_mut(|l| l.timestamp = end_by - 1);
+    assert_eq!(
+        c.client.try_refund_remainder(&id).err(),
+        Some(Ok(Error::NotEnded))
+    );
+
+    // Exactly at end_by must still fail (<= end_by is disallowed)
+    c.env.ledger().with_mut(|l| l.timestamp = end_by);
+    assert_eq!(
+        c.client.try_refund_remainder(&id).err(),
+        Some(Ok(Error::NotEnded))
+    );
+
+    // Exactly 1 second past end_by must succeed
+    c.env.ledger().with_mut(|l| l.timestamp = end_by + 1);
+    let refunded = c.client.refund_remainder(&id);
+    assert_eq!(refunded, 1_000);
+    assert_eq!(
+        c.client.get_programme(&id).unwrap().status,
+        ProgrammeStatus::Closed
+    );
+}
+
+#[test]
 fn late_claim_flagged_not_blocked() {
     let c = setup();
     let id = create(&c);
