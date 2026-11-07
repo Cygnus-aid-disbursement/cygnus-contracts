@@ -204,6 +204,39 @@ fn refund_before_end_fails_after_end_succeeds() {
 }
 
 #[test]
+fn refund_remainder_exact_boundary() {
+    let c = setup();
+    let id = create(&c);
+    c.client.fund(&id, &1_000);
+
+    let end_by = c.client.get_programme(&id).unwrap().end_by;
+    assert_eq!(end_by, 20 * DAY);
+
+    // 1 second before end_by must fail
+    c.env.ledger().with_mut(|l| l.timestamp = end_by - 1);
+    assert_eq!(
+        c.client.try_refund_remainder(&id).err(),
+        Some(Ok(Error::NotEnded))
+    );
+
+    // Exactly at end_by must still fail (<= end_by is disallowed)
+    c.env.ledger().with_mut(|l| l.timestamp = end_by);
+    assert_eq!(
+        c.client.try_refund_remainder(&id).err(),
+        Some(Ok(Error::NotEnded))
+    );
+
+    // Exactly 1 second past end_by must succeed
+    c.env.ledger().with_mut(|l| l.timestamp = end_by + 1);
+    let refunded = c.client.refund_remainder(&id);
+    assert_eq!(refunded, 1_000);
+    assert_eq!(
+        c.client.get_programme(&id).unwrap().status,
+        ProgrammeStatus::Closed
+    );
+}
+
+#[test]
 fn late_claim_flagged_not_blocked() {
     let c = setup();
     let id = create(&c);
@@ -237,6 +270,55 @@ fn on_time_claim_not_flagged() {
 }
 
 #[test]
+fn claim_timestamp_due_by_boundary() {
+    let c = setup();
+    let id = create(&c);
+    c.client.fund(&id, &1_000);
+
+    let due0 = c
+        .client
+        .get_programme(&id)
+        .unwrap()
+        .milestones
+        .get_unchecked(0)
+        .due_by;
+    assert_eq!(due0, 10 * DAY);
+
+    // Exactly at due_by (due0) should not be flagged late
+    c.env.ledger().with_mut(|l| l.timestamp = due0);
+    c.client.claim(&id, &0, &hash(&c.env, 10));
+    let st0 = c
+        .client
+        .get_programme(&id)
+        .unwrap()
+        .milestone_states
+        .get_unchecked(0);
+    assert_eq!(st0.status, MilestoneStatus::Claimed);
+    assert!(!st0.claimed_late);
+
+    // 1 second past due_by (due1 + 1) must be flagged late
+    let due1 = c
+        .client
+        .get_programme(&id)
+        .unwrap()
+        .milestones
+        .get_unchecked(1)
+        .due_by;
+    assert_eq!(due1, 20 * DAY);
+
+    c.env.ledger().with_mut(|l| l.timestamp = due1 + 1);
+    c.client.claim(&id, &1, &hash(&c.env, 20));
+    let st1 = c
+        .client
+        .get_programme(&id)
+        .unwrap()
+        .milestone_states
+        .get_unchecked(1);
+    assert_eq!(st1.status, MilestoneStatus::Claimed);
+    assert!(st1.claimed_late);
+}
+
+#[test]
 fn reject_then_reclaim() {
     let c = setup();
     let id = create(&c);
@@ -256,6 +338,240 @@ fn reject_then_reclaim() {
     c.client.claim(&id, &0, &hash(&c.env, 21));
     c.client.approve(&id, &0);
     assert_eq!(c.client.get_programme(&id).unwrap().released, 600);
+}
+
+#[test]
+fn multi_cycle_claim_reject_resubmission() {
+    let c = setup();
+    let id = create(&c);
+    c.client.fund(&id, &1_000);
+
+    let ev1 = hash(&c.env, 101);
+    let rz1 = hash(&c.env, 102);
+    let ev2 = hash(&c.env, 103);
+    let rz2 = hash(&c.env, 104);
+    let ev3 = hash(&c.env, 105);
+
+    // Cycle 1: claim then reject
+    c.client.claim(&id, &0, &ev1);
+    let st = c
+        .client
+        .get_programme(&id)
+        .unwrap()
+        .milestone_states
+        .get_unchecked(0);
+    assert_eq!(st.status, MilestoneStatus::Claimed);
+    assert_eq!(st.evidence_hash, Some(ev1));
+    assert_eq!(st.reason_hash, None);
+
+    c.client.reject(&id, &0, &rz1);
+    let st = c
+        .client
+        .get_programme(&id)
+        .unwrap()
+        .milestone_states
+        .get_unchecked(0);
+    assert_eq!(st.status, MilestoneStatus::Rejected);
+    assert_eq!(st.reason_hash, Some(rz1));
+
+    // Cycle 2: re-claim with new evidence, reason_hash reset to None
+    c.client.claim(&id, &0, &ev2);
+    let st = c
+        .client
+        .get_programme(&id)
+        .unwrap()
+        .milestone_states
+        .get_unchecked(0);
+    assert_eq!(st.status, MilestoneStatus::Claimed);
+    assert_eq!(st.evidence_hash, Some(ev2));
+    assert_eq!(st.reason_hash, None);
+
+    c.client.reject(&id, &0, &rz2);
+    let st = c
+        .client
+        .get_programme(&id)
+        .unwrap()
+        .milestone_states
+        .get_unchecked(0);
+    assert_eq!(st.status, MilestoneStatus::Rejected);
+    assert_eq!(st.reason_hash, Some(rz2));
+
+    // Cycle 3: re-claim and finally approve
+    c.client.claim(&id, &0, &ev3);
+    c.client.approve(&id, &0);
+    let st = c
+        .client
+        .get_programme(&id)
+        .unwrap()
+        .milestone_states
+        .get_unchecked(0);
+    assert_eq!(st.status, MilestoneStatus::Approved);
+    assert_eq!(st.evidence_hash, Some(ev3));
+    assert_eq!(c.client.get_programme(&id).unwrap().released, 600);
+}
+
+#[test]
+fn three_balance_invariant_holds_at_each_transition() {
+    let c = setup();
+    let id = create(&c);
+    let token = soroban_sdk::token::Client::new(&c.env, &c.asset);
+
+    // Initial state
+    let p = c.client.get_programme(&id).unwrap();
+    assert!(p.disbursed <= p.released && p.released <= p.funded);
+    assert_eq!(token.balance(&c.contract_id), 0);
+
+    // Step 1: Fund 400
+    c.client.fund(&id, &400);
+    let p = c.client.get_programme(&id).unwrap();
+    assert_eq!(p.funded, 400);
+    assert!(p.disbursed <= p.released && p.released <= p.funded);
+    assert_eq!(token.balance(&c.contract_id), 400);
+
+    // Step 2: Milestone 0 (amount 600) cannot be approved yet
+    c.client.claim(&id, &0, &hash(&c.env, 10));
+    assert_eq!(
+        c.client.try_approve(&id, &0).err(),
+        Some(Ok(Error::InsufficientFunding))
+    );
+
+    // Step 3: Fund another 300 (total funded = 700)
+    c.client.fund(&id, &300);
+    let p = c.client.get_programme(&id).unwrap();
+    assert_eq!(p.funded, 700);
+    assert_eq!(token.balance(&c.contract_id), 700);
+
+    // Step 4: Approve milestone 0 (releases 600)
+    c.client.approve(&id, &0);
+    let p = c.client.get_programme(&id).unwrap();
+    assert_eq!(p.released, 600);
+    assert!(p.disbursed <= p.released && p.released <= p.funded);
+
+    // Step 5: Disburse batch 0 of 250
+    let (root0, _, total0, count0) = build_batch_with_amount(&c.env, 25, 1, 10);
+    assert_eq!(total0, 250);
+    c.client.disburse(&id, &root0, &total0, &count0);
+    let p = c.client.get_programme(&id).unwrap();
+    assert_eq!(p.disbursed, 250);
+    assert!(p.disbursed <= p.released && p.released <= p.funded);
+    assert_eq!(token.balance(&c.contract_id), 450);
+    assert_eq!(token.balance(&c.implementer), 250);
+
+    // Step 6: Disburse batch 1 of 300
+    let (root1, _, total1, count1) = build_batch_with_amount(&c.env, 30, 2, 10);
+    assert_eq!(total1, 300);
+    c.client.disburse(&id, &root1, &total1, &count1);
+    let p = c.client.get_programme(&id).unwrap();
+    assert_eq!(p.disbursed, 550);
+    assert!(p.disbursed <= p.released && p.released <= p.funded);
+    assert_eq!(token.balance(&c.contract_id), 150);
+
+    // Step 7: Attempting to disburse 100 exceeds released (550 + 100 > 600)
+    let (root_fail, _, _, count_fail) = build_batch_with_amount(&c.env, 10, 3, 10);
+    assert_eq!(
+        c.client
+            .try_disburse(&id, &root_fail, &100, &count_fail)
+            .err(),
+        Some(Ok(Error::InsufficientReleased))
+    );
+
+    // Step 8: Fund remaining 300 and approve milestone 1 (amount 400)
+    c.client.claim(&id, &1, &hash(&c.env, 20));
+    c.client.fund(&id, &300);
+    c.client.approve(&id, &1);
+    let p = c.client.get_programme(&id).unwrap();
+    assert_eq!(p.funded, 1_000);
+    assert_eq!(p.released, 1_000);
+    assert_eq!(p.disbursed, 550);
+    assert!(p.disbursed <= p.released && p.released <= p.funded);
+    assert_eq!(token.balance(&c.contract_id), 450);
+
+    // Step 9: Disburse remaining 450 in batch 2
+    let (root2, _, total2, count2) = build_batch_with_amount(&c.env, 45, 4, 10);
+    assert_eq!(total2, 450);
+    c.client.disburse(&id, &root2, &total2, &count2);
+    let p = c.client.get_programme(&id).unwrap();
+    assert_eq!(p.disbursed, 1_000);
+    assert!(p.disbursed <= p.released && p.released <= p.funded);
+    assert_eq!(token.balance(&c.contract_id), 0);
+    assert_eq!(token.balance(&c.implementer), 1_000);
+}
+
+#[test]
+fn unauthorized_signers_rejected_on_all_endpoints() {
+    let c = setup();
+    let id = create(&c);
+    c.client.fund(&id, &1_000);
+    c.client.claim(&id, &0, &hash(&c.env, 20));
+
+    let stranger = Address::generate(&c.env);
+
+    // Stranger attempting to approve fails
+    let res = c
+        .client
+        .mock_auths(&[MockAuth {
+            address: &stranger,
+            invoke: &MockAuthInvoke {
+                contract: &c.contract_id,
+                fn_name: "approve",
+                args: (id, 0u32).into_val(&c.env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_approve(&id, &0);
+    assert!(res.is_err());
+
+    // Stranger attempting to reject fails
+    let res = c
+        .client
+        .mock_auths(&[MockAuth {
+            address: &stranger,
+            invoke: &MockAuthInvoke {
+                contract: &c.contract_id,
+                fn_name: "reject",
+                args: (id, 0u32, hash(&c.env, 99)).into_val(&c.env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_reject(&id, &0, &hash(&c.env, 99));
+    assert!(res.is_err());
+
+    // Approve properly so we can test disburse
+    c.client.approve(&id, &0);
+
+    // Stranger attempting to disburse fails
+    let (root, _, total, count) = build_batch_with_amount(&c.env, 5, 1, 10);
+    let res = c
+        .client
+        .mock_auths(&[MockAuth {
+            address: &stranger,
+            invoke: &MockAuthInvoke {
+                contract: &c.contract_id,
+                fn_name: "disburse",
+                args: (id, root.clone(), total, count).into_val(&c.env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_disburse(&id, &root, &total, &count);
+    assert!(res.is_err());
+
+    // Fast-forward past end_by for refund test
+    c.env.ledger().with_mut(|l| l.timestamp = 25 * DAY);
+
+    // Stranger attempting to refund fails
+    let res = c
+        .client
+        .mock_auths(&[MockAuth {
+            address: &stranger,
+            invoke: &MockAuthInvoke {
+                contract: &c.contract_id,
+                fn_name: "refund_remainder",
+                args: (id,).into_val(&c.env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_refund_remainder(&id);
+    assert!(res.is_err());
 }
 
 #[test]
@@ -390,6 +706,86 @@ fn merkle_tree_roundtrip() {
                 merkle::verify(&env, &leaf, &proof, &root),
                 "leaf {i} of {n} failed"
             );
+        }
+    }
+}
+
+#[test]
+fn single_leaf_batch_verification_on_chain() {
+    let c = setup();
+    let id = create(&c);
+    c.client.fund(&id, &1_000);
+    c.client.claim(&id, &0, &hash(&c.env, 20));
+    c.client.approve(&id, &0);
+
+    // Build a batch with exactly 1 recipient
+    let (root, leaves, total, count) = build_batch_with_amount(&c.env, 1, 99, 150);
+    assert_eq!(count, 1);
+    assert_eq!(total, 150);
+    let single_leaf = leaves.get_unchecked(0);
+    // In a 1-leaf tree, root is identical to the leaf
+    assert_eq!(root, single_leaf);
+
+    let batch_idx = c.client.disburse(&id, &root, &total, &count);
+    assert_eq!(batch_idx, 0);
+
+    // Single-leaf inclusion proof must be empty
+    let empty_proof = Vec::new(&c.env);
+    assert!(c
+        .client
+        .verify_inclusion(&id, &batch_idx, &single_leaf, &empty_proof));
+
+    // A non-empty proof against a single-leaf tree must fail
+    let spurious_proof = vec![&c.env, hash(&c.env, 55)];
+    assert!(!c
+        .client
+        .verify_inclusion(&id, &batch_idx, &single_leaf, &spurious_proof));
+
+    // A tampered leaf must fail
+    let wrong_leaf = hash(&c.env, 88);
+    assert!(!c
+        .client
+        .verify_inclusion(&id, &batch_idx, &wrong_leaf, &empty_proof));
+}
+
+#[test]
+fn merkle_odd_counts_and_sibling_ordering() {
+    let env = Env::default();
+
+    // Verify all odd leaf counts up to 33 carry up tail without duplication
+    for n in [3u32, 5, 7, 9, 13, 17, 33] {
+        let (root, leaves, _, _) = build_batch(&env, n, 42);
+        for i in 0..leaves.len() {
+            let leaf = leaves.get_unchecked(i);
+            let proof = merkle_proof(&env, &leaves, i);
+            assert!(
+                merkle::verify(&env, &leaf, &proof, &root),
+                "leaf {i} of {n} failed"
+            );
+
+            // If proof has at least 2 siblings, swapping them must fail verification
+            if proof.len() >= 2 {
+                let mut swapped_proof = proof.clone();
+                let s0 = swapped_proof.get_unchecked(0);
+                let s1 = swapped_proof.get_unchecked(1);
+                swapped_proof.set(0, s1);
+                swapped_proof.set(1, s0);
+                assert!(
+                    !merkle::verify(&env, &leaf, &swapped_proof, &root),
+                    "swapped siblings unexpectedly verified for leaf {i} of {n}"
+                );
+            }
+
+            // Tampering with the first sibling must fail verification
+            if !proof.is_empty() {
+                let mut tampered_proof = proof.clone();
+                let bad_sibling = hash(&env, 254);
+                tampered_proof.set(0, bad_sibling);
+                assert!(
+                    !merkle::verify(&env, &leaf, &tampered_proof, &root),
+                    "tampered sibling unexpectedly verified for leaf {i} of {n}"
+                );
+            }
         }
     }
 }
