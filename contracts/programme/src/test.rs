@@ -395,6 +395,44 @@ fn merkle_tree_roundtrip() {
 }
 
 #[test]
+fn single_leaf_batch_verification_on_chain() {
+    let c = setup();
+    let id = create(&c);
+    c.client.fund(&id, &1_000);
+    c.client.claim(&id, &0, &hash(&c.env, 20));
+    c.client.approve(&id, &0);
+
+    // Build a batch with exactly 1 recipient
+    let (root, leaves, total, count) = build_batch_with_amount(&c.env, 1, 99, 150);
+    assert_eq!(count, 1);
+    assert_eq!(total, 150);
+    let single_leaf = leaves.get_unchecked(0);
+    // In a 1-leaf tree, root is identical to the leaf
+    assert_eq!(root, single_leaf);
+
+    let batch_idx = c.client.disburse(&id, &root, &total, &count);
+    assert_eq!(batch_idx, 0);
+
+    // Single-leaf inclusion proof must be empty
+    let empty_proof = Vec::new(&c.env);
+    assert!(c
+        .client
+        .verify_inclusion(&id, &batch_idx, &single_leaf, &empty_proof));
+
+    // A non-empty proof against a single-leaf tree must fail
+    let spurious_proof = vec![&c.env, hash(&c.env, 55)];
+    assert!(!c
+        .client
+        .verify_inclusion(&id, &batch_idx, &single_leaf, &spurious_proof));
+
+    // A tampered leaf must fail
+    let wrong_leaf = hash(&c.env, 88);
+    assert!(!c
+        .client
+        .verify_inclusion(&id, &batch_idx, &wrong_leaf, &empty_proof));
+}
+
+#[test]
 fn views_and_hash_leaf() {
     let c = setup();
     let id = create(&c);
