@@ -576,10 +576,12 @@ fn refund_remainder_nothing_to_refund() {
     c.client.approve(&id, &1);
 
     // Disburse all 1,000 across two batches (600 + 400)
-    let (root0, _, _, _) = build_batch(&c.env, 50, 10);
-    c.client.disburse(&id, &root0, &600, &50);
-    let (root1, _, _, _) = build_batch(&c.env, 40, 20);
-    c.client.disburse(&id, &root1, &400, &40);
+    let (root0, _, total0, count0) = build_batch_with_amount(&c.env, 50, 10, 12);
+    assert_eq!(total0, 600);
+    c.client.disburse(&id, &root0, &total0, &count0);
+    let (root1, _, total1, count1) = build_batch_with_amount(&c.env, 40, 20, 10);
+    assert_eq!(total1, 400);
+    c.client.disburse(&id, &root1, &total1, &count1);
 
     let p = c.client.get_programme(&id).unwrap();
     assert_eq!(p.funded, 1_000);
