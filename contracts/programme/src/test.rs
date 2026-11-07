@@ -1022,6 +1022,10 @@ fn programme_not_found_on_all_mutations() {
         c.client.try_refund_remainder(&missing_id).err(),
         Some(Ok(Error::ProgrammeNotFound))
     );
+    assert_eq!(
+        c.client.try_cancel_programme(&missing_id).err(),
+        Some(Ok(Error::ProgrammeNotFound))
+    );
 }
 
 #[test]
@@ -1064,6 +1068,10 @@ fn closed_programme_rejects_mutations() {
     );
     assert_eq!(
         c.client.try_refund_remainder(&id).err(),
+        Some(Ok(Error::AlreadyClosed))
+    );
+    assert_eq!(
+        c.client.try_cancel_programme(&id).err(),
         Some(Ok(Error::AlreadyClosed))
     );
 }
