@@ -1476,6 +1476,80 @@ fn claim_before_funding_and_approve_after_funding() {
     );
 }
 
+#[test]
+fn panel_approval_funding_shortfall_blocks_resolution_until_funded() {
+    let c = setup();
+    let m1 = Address::generate(&c.env);
+    let m2 = Address::generate(&c.env);
+
+    let id = c.client.create_programme(
+        &c.sponsor,
+        &c.implementer,
+        &c.asset,
+        &1_000,
+        &milestones(&c.env),
+        &ApproverConfig::Panel(vec![&c.env, m1.clone(), m2.clone()], 2),
+        &hash(&c.env, 9),
+    );
+
+    // Partially fund 400 (milestone 0 requires 600)
+    c.client.fund(&id, &400);
+    c.client.claim(&id, &0, &hash(&c.env, 20));
+
+    // Member 1 approves: 1 of 2 threshold recorded
+    c.client.approve_by(&id, &0, &m1);
+
+    // Member 2 approves: threshold 2 is met, but released(0) + amount(600) > funded(400)
+    // Transaction reverts with InsufficientFunding
+    let res = c.client.try_approve_by(&id, &0, &m2);
+    assert_eq!(res.err().unwrap(), Ok(Error::InsufficientFunding));
+
+    // Sponsor funds remaining 600 (now funded is 1,000)
+    c.client.fund(&id, &600);
+
+    // Member 2 can now approve and threshold completes successfully
+    c.client.approve_by(&id, &0, &m2);
+    let p = c.client.get_programme(&id).unwrap();
+    assert_eq!(p.released, 600);
+    assert_eq!(
+        p.milestone_states.get_unchecked(0).status,
+        MilestoneStatus::Approved
+    );
+}
+
+#[test]
+fn oracle_approve_requires_oracle_auth() {
+    let c = setup();
+    let oracle = Address::generate(&c.env);
+
+    let id = c.client.create_programme(
+        &c.sponsor,
+        &c.implementer,
+        &c.asset,
+        &1_000,
+        &milestones(&c.env),
+        &ApproverConfig::Oracle(oracle.clone()),
+        &hash(&c.env, 9),
+    );
+    c.client.fund(&id, &1_000);
+    c.client.claim(&id, &0, &hash(&c.env, 20));
+
+    // Use MockAuth to verify that oracle authorization is checked
+    c.env.mock_auths(&[MockAuth {
+        address: &oracle,
+        invoke: &MockAuthInvoke {
+            contract: &c.contract_id,
+            fn_name: "approve_by",
+            args: (&id, &0u32, &oracle).into_val(&c.env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    c.client.approve_by(&id, &0, &oracle);
+    let p = c.client.get_programme(&id).unwrap();
+    assert_eq!(p.released, 600);
+}
+
 // --- test-only Merkle helpers -------------------------------------------------
 
 // Build a batch of `n` synthetic leaves with a specified amount per leaf.
