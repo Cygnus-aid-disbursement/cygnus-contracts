@@ -78,8 +78,15 @@ pub struct ProgrammeRefunded {
     pub amount: i128,
 }
 
+#[contractevent]
+pub struct ProgrammeCancelled {
+    #[topic]
+    pub programme_id: u64,
+    pub sponsor: Address,
+}
+
 #[contracttype]
-enum DataKey {
+pub(crate) enum DataKey {
     // Monotonic programme id counter.
     Counter,
     Programme(u64),
@@ -91,6 +98,11 @@ enum DataKey {
 const LEDGERS_PER_DAY: u32 = 17_280;
 const BUMP_THRESHOLD: u32 = LEDGERS_PER_DAY * 30;
 const BUMP_TO: u32 = LEDGERS_PER_DAY * 120;
+
+/// Maximum number of milestones permitted per programme to bound persistent storage.
+pub const MAX_MILESTONES: u32 = 25;
+/// Maximum number of disbursement batches permitted per programme.
+pub const MAX_BATCHES: u32 = 1_000;
 
 #[contract]
 pub struct ProgrammeContract;
@@ -116,6 +128,12 @@ impl ProgrammeContract {
 
         if total <= 0 {
             return Err(Error::InvalidAmount);
+        }
+        if milestones.is_empty() {
+            return Err(Error::EmptyMilestones);
+        }
+        if milestones.len() > MAX_MILESTONES {
+            return Err(Error::TooManyMilestones);
         }
         for m in milestones.iter() {
             if m.amount <= 0 {
@@ -311,6 +329,9 @@ impl ProgrammeContract {
         if total <= 0 || count == 0 {
             return Err(Error::InvalidBatch);
         }
+        if p.batch_count >= MAX_BATCHES {
+            return Err(Error::TooManyBatches);
+        }
         if p.disbursed + total > p.released {
             return Err(Error::InsufficientReleased);
         }
@@ -376,8 +397,43 @@ impl ProgrammeContract {
         Ok(remainder)
     }
 
+    /// Sponsor cancels an erroneously created programme before any funding has
+    /// been deposited. Closes the programme immediately.
+    pub fn cancel_programme(env: Env, programme_id: u64) -> Result<(), Error> {
+        let mut p = load(&env, programme_id)?;
+        active(&p)?;
+        p.sponsor.require_auth();
+
+        if p.funded > 0 {
+            return Err(Error::FundingAlreadyReceived);
+        }
+
+        p.status = ProgrammeStatus::Closed;
+        save(&env, &p);
+
+        ProgrammeCancelled {
+            programme_id,
+            sponsor: p.sponsor,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
     pub fn get_programme(env: Env, programme_id: u64) -> Option<Programme> {
         load(&env, programme_id).ok()
+    }
+
+    /// Return a single milestone and its state without decoding the entire
+    /// programme record. Returns None for an unknown programme or invalid index.
+    pub fn get_milestone(
+        env: Env,
+        programme_id: u64,
+        milestone_index: u32,
+    ) -> Option<(Milestone, MilestoneState)> {
+        let p = load(&env, programme_id).ok()?;
+        let m = p.milestones.get(milestone_index)?;
+        let s = p.milestone_states.get(milestone_index)?;
+        Some((m, s))
     }
 
     pub fn get_batch(env: Env, programme_id: u64, batch_index: u32) -> Option<DisbursementBatch> {

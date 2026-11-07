@@ -7,10 +7,10 @@ and the contract's own tests decide.
 
 ## 1. Actors
 
-- **Sponsor** — funds the programme and recovers any remainder after the end
+- **Sponsor** Ã¢â‚¬â€ funds the programme and recovers any remainder after the end
   date. Authorises `create_programme`, `fund` and `refund_remainder`.
-- **Implementer** — the NGO or field office. Authorises `claim` and `disburse`.
-- **Approver** — releases a claimed milestone's budget. At the 65% line only the
+- **Implementer** Ã¢â‚¬â€ the NGO or field office. Authorises `claim` and `disburse`.
+- **Approver** Ã¢â‚¬â€ releases a claimed milestone's budget. At the 65% line only the
   `Single` approver is built. Authorises `approve` and `reject`.
 
 There is no platform account. Funds sit in the contract under the programme's own
@@ -23,6 +23,7 @@ after which it is `Closed` and rejects every state-changing call.
 
 ```
 create_programme -> Active
+Active --cancel_programme (when funded == 0)--> Closed
 Active --refund_remainder (after end date)--> Closed
 ```
 
@@ -43,12 +44,13 @@ contract enforces. A violated precondition returns the error in section 6.
 
 | Call | Actor | Precondition |
 |---|---|---|
-| `create_programme` | sponsor | `total > 0`; every milestone `amount > 0` |
+| `create_programme` | sponsor | `total > 0`; `0 < count <= MAX_MILESTONES (25)`; every milestone `amount > 0` |
 | `fund` | sponsor | programme `Active`; `amount > 0` |
 | `claim` | implementer | programme `Active`; milestone `Pending` or `Rejected` |
 | `approve` | approver | programme `Active`; milestone `Claimed`; `released + amount <= funded` |
 | `reject` | approver | programme `Active`; milestone `Claimed` |
-| `disburse` | implementer | programme `Active`; `total > 0`; `count > 0`; `disbursed + total <= released` |
+| `disburse` | implementer | programme `Active`; `total > 0`; `count > 0`; `batch_count < MAX_BATCHES (1000)`; `disbursed + total <= released` |
+| `cancel_programme` | sponsor | programme `Active`; `funded == 0` |
 | `refund_remainder` | sponsor | programme `Active`; `now > end_by`; `funded - disbursed > 0` |
 
 The programme's `end_by` is the latest `due_by` across its milestones. It is not
@@ -61,10 +63,10 @@ hash; the description itself stays off chain.
 
 Three running balances govern the money:
 
-- `funded` — total received through `fund`.
-- `released` — sum of approved milestone amounts. `approve` moves a milestone's
+- `funded` Ã¢â‚¬â€ total received through `fund`.
+- `released` Ã¢â‚¬â€ sum of approved milestone amounts. `approve` moves a milestone's
   budget from merely funded to spendable.
-- `disbursed` — sum of batch totals paid out through `disburse`.
+- `disbursed` Ã¢â‚¬â€ sum of batch totals paid out through `disburse`.
 
 The invariant `disbursed <= released <= funded` holds at all times. A claim after
 `due_by` sets `claimed_late = true` on the milestone; it is recorded, never
@@ -140,6 +142,10 @@ external auditor can confirm they reproduce the leaf encoding exactly.
 | 12 | `ApproverKindUnimplemented` | approve/reject under a `Panel` or `Oracle` approver |
 | 13 | `NothingToRefund` | refund when `funded - disbursed` is zero |
 | 14 | `BatchIndexOutOfRange` | reserved for callers that index batches directly |
+| 15 | `TooManyMilestones` | milestone count exceeds `MAX_MILESTONES (25)` |
+| 16 | `TooManyBatches` | batch count reaches `MAX_BATCHES (1000)` |
+| 17 | `EmptyMilestones` | milestone list is empty |
+| 18 | `FundingAlreadyReceived` | cancel when `funded > 0` |
 
 ## 7. Events
 
@@ -156,6 +162,7 @@ remaining fields are event data.
 | `MilestoneApproved` | `programme_id` | `milestone_index` |
 | `MilestoneRejected` | `programme_id` | `milestone_index, reason_hash` |
 | `BatchDisbursed` | `programme_id` | `batch_index, root, total, count` |
+| `ProgrammeCancelled` | `programme_id` | `sponsor` |
 | `ProgrammeRefunded` | `programme_id` | `amount` |
 
 An indexer can reconstruct a programme's full public history from these events

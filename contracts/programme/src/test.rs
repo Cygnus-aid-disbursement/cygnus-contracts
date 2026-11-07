@@ -824,6 +824,174 @@ fn views_and_hash_leaf() {
 }
 
 #[test]
+fn get_milestone_view_endpoint() {
+    let c = setup();
+    let id = create(&c);
+
+    // Initial pending milestone 0 (amount 600, due_by 10 * DAY)
+    let (m0, s0) = c.client.get_milestone(&id, &0).unwrap();
+    assert_eq!(m0.amount, 600);
+    assert_eq!(m0.due_by, 10 * DAY);
+    assert_eq!(s0.status, MilestoneStatus::Pending);
+    assert_eq!(s0.evidence_hash, None);
+
+    // Initial pending milestone 1 (amount 400, due_by 20 * DAY)
+    let (m1, s1) = c.client.get_milestone(&id, &1).unwrap();
+    assert_eq!(m1.amount, 400);
+    assert_eq!(m1.due_by, 20 * DAY);
+    assert_eq!(s1.status, MilestoneStatus::Pending);
+
+    // State changes are visible via get_milestone
+    let ev = hash(&c.env, 88);
+    c.client.claim(&id, &0, &ev);
+    let (_, s0_claimed) = c.client.get_milestone(&id, &0).unwrap();
+    assert_eq!(s0_claimed.status, MilestoneStatus::Claimed);
+    assert_eq!(s0_claimed.evidence_hash, Some(ev));
+
+    // Out-of-range index returns None
+    assert!(c.client.get_milestone(&id, &2).is_none());
+    assert!(c.client.get_milestone(&id, &99).is_none());
+
+    // Unknown programme id returns None
+    assert!(c.client.get_milestone(&999, &0).is_none());
+}
+
+#[test]
+fn milestone_and_batch_bounds_enforced() {
+    let c = setup();
+
+    // 0 milestones fails with EmptyMilestones
+    let empty_milestones: Vec<Milestone> = Vec::new(&c.env);
+    assert_eq!(
+        c.client
+            .try_create_programme(
+                &c.sponsor,
+                &c.implementer,
+                &c.asset,
+                &1_000,
+                &empty_milestones,
+                &ApproverConfig::Single(c.approver.clone()),
+                &hash(&c.env, 1),
+            )
+            .err(),
+        Some(Ok(Error::EmptyMilestones))
+    );
+
+    // Exact boundary: MAX_MILESTONES (25) succeeds
+    let mut boundary_milestones = Vec::new(&c.env);
+    for i in 0..crate::MAX_MILESTONES {
+        boundary_milestones.push_back(Milestone {
+            description_hash: hash(&c.env, i as u8),
+            amount: 10,
+            due_by: (i as u64 + 1) * DAY,
+        });
+    }
+    assert_eq!(boundary_milestones.len(), crate::MAX_MILESTONES);
+    let id_boundary = c.client.create_programme(
+        &c.sponsor,
+        &c.implementer,
+        &c.asset,
+        &250,
+        &boundary_milestones,
+        &ApproverConfig::Single(c.approver.clone()),
+        &hash(&c.env, 2),
+    );
+    assert!(c.client.get_programme(&id_boundary).is_some());
+
+    // One past boundary: MAX_MILESTONES + 1 (26) fails
+    let mut over_milestones = boundary_milestones.clone();
+    over_milestones.push_back(Milestone {
+        description_hash: hash(&c.env, 26),
+        amount: 10,
+        due_by: 26 * DAY,
+    });
+    assert_eq!(over_milestones.len(), crate::MAX_MILESTONES + 1);
+    assert_eq!(
+        c.client
+            .try_create_programme(
+                &c.sponsor,
+                &c.implementer,
+                &c.asset,
+                &260,
+                &over_milestones,
+                &ApproverConfig::Single(c.approver.clone()),
+                &hash(&c.env, 3),
+            )
+            .err(),
+        Some(Ok(Error::TooManyMilestones))
+    );
+}
+
+#[test]
+fn max_batches_limit_enforced() {
+    let c = setup();
+    let id = create(&c);
+    c.client.fund(&id, &1_000);
+    c.client.claim(&id, &0, &hash(&c.env, 10));
+    c.client.approve(&id, &0);
+
+    // Directly mutate batch_count to MAX_BATCHES in storage
+    c.env.as_contract(&c.contract_id, || {
+        let key = crate::DataKey::Programme(id);
+        let mut p: crate::Programme = c.env.storage().persistent().get(&key).unwrap();
+        p.batch_count = crate::MAX_BATCHES;
+        c.env.storage().persistent().set(&key, &p);
+    });
+
+    let (root, _, total, count) = build_batch_with_amount(&c.env, 1, 1, 10);
+    assert_eq!(
+        c.client.try_disburse(&id, &root, &total, &count).err(),
+        Some(Ok(Error::TooManyBatches))
+    );
+}
+
+#[test]
+fn cancel_programme_lifecycle_and_guards() {
+    let c = setup();
+    let id = create(&c);
+
+    // Cancel unfunded programme succeeds
+    c.client.cancel_programme(&id);
+    let p = c.client.get_programme(&id).unwrap();
+    assert_eq!(p.status, ProgrammeStatus::Closed);
+
+    // Closed programme rejects further actions
+    assert_eq!(
+        c.client.try_fund(&id, &100).err(),
+        Some(Ok(Error::AlreadyClosed))
+    );
+    assert_eq!(
+        c.client.try_cancel_programme(&id).err(),
+        Some(Ok(Error::AlreadyClosed))
+    );
+
+    // Cancellation of funded programme is rejected
+    let id2 = create(&c);
+    c.client.fund(&id2, &500);
+    assert_eq!(
+        c.client.try_cancel_programme(&id2).err(),
+        Some(Ok(Error::FundingAlreadyReceived))
+    );
+
+    // Stranger attempting to cancel fails auth check
+    let id3 = create(&c);
+    let stranger = Address::generate(&c.env);
+    let res = c
+        .client
+        .mock_auths(&[MockAuth {
+            address: &stranger,
+            invoke: &MockAuthInvoke {
+                contract: &c.contract_id,
+                fn_name: "cancel_programme",
+                args: (id3,).into_val(&c.env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_cancel_programme(&id3);
+    assert!(res.is_err());
+}
+
+#[test]
 fn programme_not_found_on_all_mutations() {
     let c = setup();
     let missing_id = 999_u64;
@@ -852,6 +1020,10 @@ fn programme_not_found_on_all_mutations() {
     );
     assert_eq!(
         c.client.try_refund_remainder(&missing_id).err(),
+        Some(Ok(Error::ProgrammeNotFound))
+    );
+    assert_eq!(
+        c.client.try_cancel_programme(&missing_id).err(),
         Some(Ok(Error::ProgrammeNotFound))
     );
 }
@@ -896,6 +1068,10 @@ fn closed_programme_rejects_mutations() {
     );
     assert_eq!(
         c.client.try_refund_remainder(&id).err(),
+        Some(Ok(Error::AlreadyClosed))
+    );
+    assert_eq!(
+        c.client.try_cancel_programme(&id).err(),
         Some(Ok(Error::AlreadyClosed))
     );
 }
