@@ -74,6 +74,17 @@ movement are public. The protocol deliberately adds no feature whose purpose is
 to hide who is transacting. Beneficiary privacy is about protecting recipients
 from a published list, not about concealing the programme's operators.
 
+## Storage exhaustion and unbounded growth
+
+An adversary creating programmes with unbounded milestones or batches could inflate
+ledger entries and increase read/write footprint and invocation fees.
+
+Mitigations:
+- `MAX_MILESTONES (25)` caps the milestone vector inside persistent programme state.
+- `MAX_BATCHES (1000)` caps total batch storage entries per programme.
+- `cancel_programme` allows sponsors to cancel zero-funded programmes immediately
+  without maintaining rent until the latest due date.
+
 ## What the protocol does not defend against
 
 - Off-chain reality. It cannot verify that goods arrived or that recipients
