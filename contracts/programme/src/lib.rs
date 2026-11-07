@@ -323,9 +323,7 @@ impl ProgrammeContract {
             count,
             disbursed_at: env.ledger().timestamp(),
         };
-        env.storage()
-            .persistent()
-            .set(&DataKey::Batch(programme_id, index), &batch);
+        save_batch(&env, programme_id, &batch);
 
         token::Client::new(&env, &p.asset).transfer(
             &env.current_contract_address(),
@@ -418,6 +416,14 @@ impl ProgrammeContract {
 fn save(env: &Env, p: &Programme) {
     let key = DataKey::Programme(p.id);
     env.storage().persistent().set(&key, p);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, BUMP_THRESHOLD, BUMP_TO);
+}
+
+fn save_batch(env: &Env, programme_id: u64, batch: &DisbursementBatch) {
+    let key = DataKey::Batch(programme_id, batch.index);
+    env.storage().persistent().set(&key, batch);
     env.storage()
         .persistent()
         .extend_ttl(&key, BUMP_THRESHOLD, BUMP_TO);
