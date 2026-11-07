@@ -380,6 +380,19 @@ impl ProgrammeContract {
         load(&env, programme_id).ok()
     }
 
+    /// Return a single milestone and its state without decoding the entire
+    /// programme record. Returns None for an unknown programme or invalid index.
+    pub fn get_milestone(
+        env: Env,
+        programme_id: u64,
+        milestone_index: u32,
+    ) -> Option<(Milestone, MilestoneState)> {
+        let p = load(&env, programme_id).ok()?;
+        let m = p.milestones.get(milestone_index)?;
+        let s = p.milestone_states.get(milestone_index)?;
+        Some((m, s))
+    }
+
     pub fn get_batch(env: Env, programme_id: u64, batch_index: u32) -> Option<DisbursementBatch> {
         env.storage()
             .persistent()

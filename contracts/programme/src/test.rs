@@ -824,6 +824,39 @@ fn views_and_hash_leaf() {
 }
 
 #[test]
+fn get_milestone_view_endpoint() {
+    let c = setup();
+    let id = create(&c);
+
+    // Initial pending milestone 0 (amount 600, due_by 10 * DAY)
+    let (m0, s0) = c.client.get_milestone(&id, &0).unwrap();
+    assert_eq!(m0.amount, 600);
+    assert_eq!(m0.due_by, 10 * DAY);
+    assert_eq!(s0.status, MilestoneStatus::Pending);
+    assert_eq!(s0.evidence_hash, None);
+
+    // Initial pending milestone 1 (amount 400, due_by 20 * DAY)
+    let (m1, s1) = c.client.get_milestone(&id, &1).unwrap();
+    assert_eq!(m1.amount, 400);
+    assert_eq!(m1.due_by, 20 * DAY);
+    assert_eq!(s1.status, MilestoneStatus::Pending);
+
+    // State changes are visible via get_milestone
+    let ev = hash(&c.env, 88);
+    c.client.claim(&id, &0, &ev);
+    let (_, s0_claimed) = c.client.get_milestone(&id, &0).unwrap();
+    assert_eq!(s0_claimed.status, MilestoneStatus::Claimed);
+    assert_eq!(s0_claimed.evidence_hash, Some(ev));
+
+    // Out-of-range index returns None
+    assert!(c.client.get_milestone(&id, &2).is_none());
+    assert!(c.client.get_milestone(&id, &99).is_none());
+
+    // Unknown programme id returns None
+    assert!(c.client.get_milestone(&999, &0).is_none());
+}
+
+#[test]
 fn programme_not_found_on_all_mutations() {
     let c = setup();
     let missing_id = 999_u64;
