@@ -386,6 +386,93 @@ fn multi_cycle_claim_reject_resubmission() {
 }
 
 #[test]
+fn three_balance_invariant_holds_at_each_transition() {
+    let c = setup();
+    let id = create(&c);
+    let token = soroban_sdk::token::Client::new(&c.env, &c.asset);
+
+    // Initial state
+    let p = c.client.get_programme(&id).unwrap();
+    assert!(p.disbursed <= p.released && p.released <= p.funded);
+    assert_eq!(token.balance(&c.contract_id), 0);
+
+    // Step 1: Fund 400
+    c.client.fund(&id, &400);
+    let p = c.client.get_programme(&id).unwrap();
+    assert_eq!(p.funded, 400);
+    assert!(p.disbursed <= p.released && p.released <= p.funded);
+    assert_eq!(token.balance(&c.contract_id), 400);
+
+    // Step 2: Milestone 0 (amount 600) cannot be approved yet
+    c.client.claim(&id, &0, &hash(&c.env, 10));
+    assert_eq!(
+        c.client.try_approve(&id, &0).err(),
+        Some(Ok(Error::InsufficientFunding))
+    );
+
+    // Step 3: Fund another 300 (total funded = 700)
+    c.client.fund(&id, &300);
+    let p = c.client.get_programme(&id).unwrap();
+    assert_eq!(p.funded, 700);
+    assert_eq!(token.balance(&c.contract_id), 700);
+
+    // Step 4: Approve milestone 0 (releases 600)
+    c.client.approve(&id, &0);
+    let p = c.client.get_programme(&id).unwrap();
+    assert_eq!(p.released, 600);
+    assert!(p.disbursed <= p.released && p.released <= p.funded);
+
+    // Step 5: Disburse batch 0 of 250
+    let (root0, _, total0, count0) = build_batch_with_amount(&c.env, 25, 1, 10);
+    assert_eq!(total0, 250);
+    c.client.disburse(&id, &root0, &total0, &count0);
+    let p = c.client.get_programme(&id).unwrap();
+    assert_eq!(p.disbursed, 250);
+    assert!(p.disbursed <= p.released && p.released <= p.funded);
+    assert_eq!(token.balance(&c.contract_id), 450);
+    assert_eq!(token.balance(&c.implementer), 250);
+
+    // Step 6: Disburse batch 1 of 300
+    let (root1, _, total1, count1) = build_batch_with_amount(&c.env, 30, 2, 10);
+    assert_eq!(total1, 300);
+    c.client.disburse(&id, &root1, &total1, &count1);
+    let p = c.client.get_programme(&id).unwrap();
+    assert_eq!(p.disbursed, 550);
+    assert!(p.disbursed <= p.released && p.released <= p.funded);
+    assert_eq!(token.balance(&c.contract_id), 150);
+
+    // Step 7: Attempting to disburse 100 exceeds released (550 + 100 > 600)
+    let (root_fail, _, _, count_fail) = build_batch_with_amount(&c.env, 10, 3, 10);
+    assert_eq!(
+        c.client
+            .try_disburse(&id, &root_fail, &100, &count_fail)
+            .err(),
+        Some(Ok(Error::InsufficientReleased))
+    );
+
+    // Step 8: Fund remaining 300 and approve milestone 1 (amount 400)
+    c.client.claim(&id, &1, &hash(&c.env, 20));
+    c.client.fund(&id, &300);
+    c.client.approve(&id, &1);
+    let p = c.client.get_programme(&id).unwrap();
+    assert_eq!(p.funded, 1_000);
+    assert_eq!(p.released, 1_000);
+    assert_eq!(p.disbursed, 550);
+    assert!(p.disbursed <= p.released && p.released <= p.funded);
+    assert_eq!(token.balance(&c.contract_id), 450);
+
+    // Step 9: Disburse remaining 450 in batch 2
+    let (root2, _, total2, count2) = build_batch_with_amount(&c.env, 45, 4, 10);
+    assert_eq!(total2, 450);
+    c.client.disburse(&id, &root2, &total2, &count2);
+    let p = c.client.get_programme(&id).unwrap();
+    assert_eq!(p.disbursed, 1_000);
+    assert!(p.disbursed <= p.released && p.released <= p.funded);
+    assert_eq!(token.balance(&c.contract_id), 0);
+    assert_eq!(token.balance(&c.implementer), 1_000);
+}
+
+#[test]
 fn panel_and_oracle_approvers_unimplemented() {
     let c = setup();
     let panel = c.client.try_create_programme(
