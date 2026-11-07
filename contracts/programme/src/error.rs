@@ -20,4 +20,7 @@ pub enum Error {
     ApproverKindUnimplemented = 12,
     NothingToRefund = 13,
     BatchIndexOutOfRange = 14,
+    TooManyMilestones = 15,
+    TooManyBatches = 16,
+    EmptyMilestones = 17,
 }
