@@ -341,6 +341,51 @@ fn reject_then_reclaim() {
 }
 
 #[test]
+fn multi_cycle_claim_reject_resubmission() {
+    let c = setup();
+    let id = create(&c);
+    c.client.fund(&id, &1_000);
+
+    let ev1 = hash(&c.env, 101);
+    let rz1 = hash(&c.env, 102);
+    let ev2 = hash(&c.env, 103);
+    let rz2 = hash(&c.env, 104);
+    let ev3 = hash(&c.env, 105);
+
+    // Cycle 1: claim then reject
+    c.client.claim(&id, &0, &ev1);
+    let st = c.client.get_programme(&id).unwrap().milestone_states.get_unchecked(0);
+    assert_eq!(st.status, MilestoneStatus::Claimed);
+    assert_eq!(st.evidence_hash, Some(ev1));
+    assert_eq!(st.reason_hash, None);
+
+    c.client.reject(&id, &0, &rz1);
+    let st = c.client.get_programme(&id).unwrap().milestone_states.get_unchecked(0);
+    assert_eq!(st.status, MilestoneStatus::Rejected);
+    assert_eq!(st.reason_hash, Some(rz1));
+
+    // Cycle 2: re-claim with new evidence, reason_hash reset to None
+    c.client.claim(&id, &0, &ev2);
+    let st = c.client.get_programme(&id).unwrap().milestone_states.get_unchecked(0);
+    assert_eq!(st.status, MilestoneStatus::Claimed);
+    assert_eq!(st.evidence_hash, Some(ev2));
+    assert_eq!(st.reason_hash, None);
+
+    c.client.reject(&id, &0, &rz2);
+    let st = c.client.get_programme(&id).unwrap().milestone_states.get_unchecked(0);
+    assert_eq!(st.status, MilestoneStatus::Rejected);
+    assert_eq!(st.reason_hash, Some(rz2));
+
+    // Cycle 3: re-claim and finally approve
+    c.client.claim(&id, &0, &ev3);
+    c.client.approve(&id, &0);
+    let st = c.client.get_programme(&id).unwrap().milestone_states.get_unchecked(0);
+    assert_eq!(st.status, MilestoneStatus::Approved);
+    assert_eq!(st.evidence_hash, Some(ev3));
+    assert_eq!(c.client.get_programme(&id).unwrap().released, 600);
+}
+
+#[test]
 fn panel_and_oracle_approvers_unimplemented() {
     let c = setup();
     let panel = c.client.try_create_programme(
