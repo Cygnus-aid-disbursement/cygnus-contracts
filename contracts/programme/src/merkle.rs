@@ -30,15 +30,17 @@ pub fn hash_leaf(env: &Env, recipient_ref: &BytesN<32>, amount: i128) -> BytesN<
 /// Children are sorted before hashing so an inclusion proof carries siblings
 /// only, never left/right flags. Ordering is by raw big-endian byte value.
 pub fn hash_node(env: &Env, a: &BytesN<32>, b: &BytesN<32>) -> BytesN<32> {
-    let (lo, hi) = if a.to_array() <= b.to_array() {
-        (a, b)
+    let a_arr = a.to_array();
+    let b_arr = b.to_array();
+    let (lo, hi) = if a_arr <= b_arr {
+        (&a_arr, &b_arr)
     } else {
-        (b, a)
+        (&b_arr, &a_arr)
     };
     let mut buf = Bytes::new(env);
     buf.push_back(NODE_DOMAIN);
-    buf.append(&Bytes::from_array(env, &lo.to_array()));
-    buf.append(&Bytes::from_array(env, &hi.to_array()));
+    buf.append(&Bytes::from_array(env, lo));
+    buf.append(&Bytes::from_array(env, hi));
     env.crypto().sha256(&buf).to_bytes()
 }
 
