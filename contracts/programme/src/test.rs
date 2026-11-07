@@ -946,6 +946,52 @@ fn max_batches_limit_enforced() {
 }
 
 #[test]
+fn cancel_programme_lifecycle_and_guards() {
+    let c = setup();
+    let id = create(&c);
+
+    // Cancel unfunded programme succeeds
+    c.client.cancel_programme(&id);
+    let p = c.client.get_programme(&id).unwrap();
+    assert_eq!(p.status, ProgrammeStatus::Closed);
+
+    // Closed programme rejects further actions
+    assert_eq!(
+        c.client.try_fund(&id, &100).err(),
+        Some(Ok(Error::AlreadyClosed))
+    );
+    assert_eq!(
+        c.client.try_cancel_programme(&id).err(),
+        Some(Ok(Error::AlreadyClosed))
+    );
+
+    // Cancellation of funded programme is rejected
+    let id2 = create(&c);
+    c.client.fund(&id2, &500);
+    assert_eq!(
+        c.client.try_cancel_programme(&id2).err(),
+        Some(Ok(Error::FundingAlreadyReceived))
+    );
+
+    // Stranger attempting to cancel fails auth check
+    let id3 = create(&c);
+    let stranger = Address::generate(&c.env);
+    let res = c
+        .client
+        .mock_auths(&[MockAuth {
+            address: &stranger,
+            invoke: &MockAuthInvoke {
+                contract: &c.contract_id,
+                fn_name: "cancel_programme",
+                args: (id3,).into_val(&c.env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_cancel_programme(&id3);
+    assert!(res.is_err());
+}
+
+#[test]
 fn programme_not_found_on_all_mutations() {
     let c = setup();
     let missing_id = 999_u64;

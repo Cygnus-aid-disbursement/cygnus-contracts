@@ -78,6 +78,13 @@ pub struct ProgrammeRefunded {
     pub amount: i128,
 }
 
+#[contractevent]
+pub struct ProgrammeCancelled {
+    #[topic]
+    pub programme_id: u64,
+    pub sponsor: Address,
+}
+
 #[contracttype]
 pub(crate) enum DataKey {
     // Monotonic programme id counter.
@@ -388,6 +395,28 @@ impl ProgrammeContract {
         }
         .publish(&env);
         Ok(remainder)
+    }
+
+    /// Sponsor cancels an erroneously created programme before any funding has
+    /// been deposited. Closes the programme immediately.
+    pub fn cancel_programme(env: Env, programme_id: u64) -> Result<(), Error> {
+        let mut p = load(&env, programme_id)?;
+        active(&p)?;
+        p.sponsor.require_auth();
+
+        if p.funded > 0 {
+            return Err(Error::FundingAlreadyReceived);
+        }
+
+        p.status = ProgrammeStatus::Closed;
+        save(&env, &p);
+
+        ProgrammeCancelled {
+            programme_id,
+            sponsor: p.sponsor,
+        }
+        .publish(&env);
+        Ok(())
     }
 
     pub fn get_programme(env: Env, programme_id: u64) -> Option<Programme> {
