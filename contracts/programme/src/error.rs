@@ -23,4 +23,5 @@ pub enum Error {
     TooManyMilestones = 15,
     TooManyBatches = 16,
     EmptyMilestones = 17,
+    FundingAlreadyReceived = 18,
 }
