@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json.schemastore.org/funding.json",
+  "drips": {
+    "network": "ethereum",
+    "recipient": "FILL_IN_ADDRESS"
+  },
+  "stellar": {
+    "network": "testnet",
+    "recipient": "GBFV5WVMLXMBQ7TAGR77YMP7MKI7SUVQRAUFZSSCYJNY73VB5CKUEYQ7"
+  }
+}
