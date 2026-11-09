@@ -103,29 +103,27 @@ remainder. When it prints "Demo complete", your environment is fully working.
 
 ## Where to start
 
-Issues carry one of three difficulty labels: `good first issue`, `intermediate`,
-`advanced`, plus area labels. The full list with acceptance criteria lives in
-[ISSUES.md](ISSUES.md); it and this section are kept in step.
+The core protocol milestones delivered in v0.1.0 include:
+- `get_milestone` granular view endpoint
+- Single-leaf and odd-count Merkle batch inclusion proofs
+- Storage resource bounds (`MAX_MILESTONES = 25`, `MAX_BATCHES = 1000`)
+- Early programme cancellation (`cancel_programme`) for unfunded programmes
+- Property-based fuzz tests across arbitrary Merkle tree shapes and proof mutations
+- Multi-party threshold panel approvers (`ApproverConfig::Panel`) with vote tracking
+- External oracle approvers (`ApproverConfig::Oracle`)
+- Storage TTL extension and rent lifecycle management
 
-1. **Add a `get_milestone` view** — `good first issue`. A read-only convenience
-   over `get_programme`. See protocol section 4.
-2. **Test the single-leaf batch on chain** — `good first issue`. Confirm a
-   count-one batch verifies with an empty proof. See protocol section 5.3.
-3. **Bound milestone and batch counts** — `intermediate`. Cap per-programme
-   storage growth with documented limits.
-4. **Add `cancel_programme` before funding** — `intermediate`. Let a sponsor
-   close a zero-funded programme immediately.
-5. **Property-based Merkle tests** — `intermediate`. Random trees to catch
-   ordering and odd-node bugs.
-6. **Panel approver with threshold** — `advanced`. The single largest piece
-   here; it changes the authorisation model and touches the SDK.
-7. **Oracle approver** — `advanced`. Release on a signed attestation.
-8. **Storage TTL and cost review** — `advanced`.
-9. **Independent invariant and privacy review** — `advanced`.
+### Open contribution opportunities
+
+Active contribution opportunities are tracked in [GitHub Issues](https://github.com/Cygnus-aid-disbursement/cygnus-contracts/issues) with difficulty labels:
+1. **Automated stream funding adapter** — `intermediate`. Integrate with recurring donor payment streams.
+2. **Indexer event benchmarks** — `good first issue`. Create reference parsers for `MilestonePanelApproved` and batch disbursement events.
+3. **Formal verification & Certora/Halmos proofs** — `advanced`. Mathematically prove the invariant `disbursed <= released <= funded`.
+4. **Cross-contract verification helper** — `advanced`. Build a companion contract that consumes `hash_leaf` and `verify_inclusion`.
 
 To claim an issue, comment on it. For anything that changes the protocol, open a
-discussion first: protocol changes need a written proposal and one maintainer
-sign-off before implementation, per docs/multi-repo.md.
+discussion first: protocol changes need a written proposal and maintainer
+sign-off before implementation, per [docs/multi-repo.md](docs/multi-repo.md).
 
 ## Rules that matter here
 
@@ -192,6 +190,7 @@ Testnet only.
 
 ## Community
 
+All contributors are expected to uphold our [Code of Conduct](CODE_OF_CONDUCT.md).
 Design discussion happens in GitHub Discussions in this repository; protocol
 changes start there. Two merged pull requests earn triage rights on request.
 Commit rights on a protocol repository are granted slowly, only after contract

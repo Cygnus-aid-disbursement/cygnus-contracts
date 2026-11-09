@@ -1,5 +1,10 @@
 # cygnus-contracts
 
+[![CI](https://github.com/Cygnus-aid-disbursement/cygnus-contracts/actions/workflows/ci.yml/badge.svg)](https://github.com/Cygnus-aid-disbursement/cygnus-contracts/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Tests: 47 passed](https://img.shields.io/badge/Tests-47%20passed-brightgreen.svg)](contracts/programme/src/test.rs)
+[![Network: Stellar Testnet](https://img.shields.io/badge/Network-Stellar%20Testnet-blueviolet.svg)](deployments/testnet.json)
+
 The programme contract for Cygnus, a humanitarian aid disbursement protocol on
 Stellar's Soroban platform. A sponsor funds a programme, an implementer claims
 against milestones, an approver releases each milestone budget, and the
@@ -8,11 +13,11 @@ auditable without publishing who the beneficiaries are.
 
 This is the protocol repository, the first of three:
 
-- **cygnus-contracts** (here) â€” the Rust contract, deployment truth, and the
+- **cygnus-contracts** (here) — the Rust contract, deployment truth, and the
   protocol specification.
-- [cygnus-sdk](https://github.com/Cygnus-aid-disbursement/cygnus-sdk) â€” the
+- [cygnus-sdk](https://github.com/Cygnus-aid-disbursement/cygnus-sdk) — the
   TypeScript client, Merkle batch construction, and hashing conventions.
-- [cygnus-app](https://github.com/Cygnus-aid-disbursement/cygnus-app) â€” the
+- [cygnus-app](https://github.com/Cygnus-aid-disbursement/cygnus-app) — the
   public dashboard and implementer console.
 
 Dependencies point one way: contracts, then SDK, then app. See
@@ -72,6 +77,25 @@ scripts/              deploy and demo scripts
 deployments/          deployment truth (testnet.json)
 ```
 
+## Contract interface
+
+| Function | Signer | Description |
+|---|---|---|
+| `create_programme` | Sponsor | Register programme with metadata hash, milestones, and approver config |
+| `cancel_programme` | Sponsor | Cancel zero-funded programme before expiration |
+| `fund` | Sponsor | Deposit token funds into the programme balance |
+| `claim` | Implementer | Submit completion evidence hash for a milestone |
+| `approve` | Approver | Approve claimed milestone under Single/Oracle approver |
+| `approve_by` | Approver / Member | Vote to approve milestone; releases budget once threshold is reached |
+| `reject` | Approver | Reject milestone under Single/Oracle approver |
+| `reject_by` | Approver / Member | Reject claimed milestone, clearing pending approvals |
+| `disburse` | Implementer | Record Merkle batch and payout funds for beneficiary distribution |
+| `refund_remainder` | Sponsor | Recover unspent funds after programme end date |
+| `get_programme` | Public (View) | Read full programme state |
+| `get_milestone` | Public (View) | Granular query for milestone specification and current state |
+| `verify_inclusion` | Public (View) | Verify beneficiary Merkle inclusion proof against on-chain batch root |
+| `hash_leaf` | Public (View) | Canonical leaf hash calculation helper |
+
 ## Quick start
 
 Prerequisites: Rust stable with the `wasm32v1-none` target, the
@@ -80,7 +104,7 @@ Node 20 or later for the demo's Merkle helper.
 
 ```bash
 rustup target add wasm32v1-none
-cargo test                                   # 18 tests, no network needed
+cargo test                                   # 47 unit & property tests, no network needed
 stellar keys generate cygnus-deployer --network testnet --fund
 bash scripts/deploy_testnet.sh               # writes deployments/testnet.json
 bash scripts/demo.sh                         # full cycle on Testnet
@@ -152,9 +176,10 @@ approver:    GANM7DX62H46B7IPIQPLL6D5FOJNM27NM6HZINDCVNZOCTLVKFPOHBDL
 
 ## Contributing
 
-Read [CONTRIBUTING.md](CONTRIBUTING.md). Open unclaimed work is tracked in
-[ISSUES.md](ISSUES.md). Report security issues privately per
-[SECURITY.md](SECURITY.md), never in a public issue.
+Read [CONTRIBUTING.md](CONTRIBUTING.md) and our [Code of Conduct](CODE_OF_CONDUCT.md).
+Open unclaimed work is tracked in [ISSUES.md](ISSUES.md). See [CHANGELOG.md](CHANGELOG.md)
+for release history. Report security issues privately per [SECURITY.md](SECURITY.md),
+never in a public issue.
 
 ## License
 
