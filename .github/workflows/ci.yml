@@ -1,29 +1,66 @@
-name: ci
+name: CI
 
 on:
   push:
     branches: [main]
   pull_request:
+    branches: [main]
 
 env:
   CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
 
 jobs:
-  build:
+  lint:
+    name: Code Formatting & Linting
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install Rust
+      - name: Install Rust toolchain
         run: |
           rustup toolchain install stable --profile minimal
           rustup component add rustfmt clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Check Formatting
+        run: cargo fmt --all -- --check
+      - name: Clippy Linter
+        run: cargo clippy --all-targets -- -D warnings
+
+  test:
+    name: Test Suite & Fuzz Verification
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+      - uses: Swatinem/rust-cache@v2
+      - name: Run Unit & Property Tests
+        run: cargo test --all-targets
+
+  wasm:
+    name: WASM Release Compilation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain & WASM target
+        run: |
+          rustup toolchain install stable --profile minimal
           rustup target add wasm32v1-none
       - uses: Swatinem/rust-cache@v2
-      - name: Format
-        run: cargo fmt --all --check
-      - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
-      - name: Test
-        run: cargo test
-      - name: Build WASM
+      - name: Build WASM Target
         run: cargo build --target wasm32v1-none --release
+      - name: Verify WASM Binary Output
+        run: |
+          test -f target/wasm32v1-none/release/cygnus_programme.wasm
+          ls -la target/wasm32v1-none/release/cygnus_programme.wasm
+
+  security:
+    name: Security & Secret Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify No Committed Secrets
+        run: |
+          ! git grep -i -E "BEGIN (RSA|OPENSSH|EC|DSA) PRIVATE KEY" -- . ':!*.lock'
+          ! git grep -i -E "STELLAR_SECRET=[S][A-Z0-9]{55}" -- . ':!*.lock'
