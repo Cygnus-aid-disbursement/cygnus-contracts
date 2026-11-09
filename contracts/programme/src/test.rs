@@ -1646,6 +1646,97 @@ fn oracle_approve_requires_oracle_auth() {
     assert_eq!(p.released, 600);
 }
 
+#[test]
+fn multi_batch_exhaustion_and_exact_zero_remainder() {
+    let c = setup();
+    let id = create(&c);
+    c.client.fund(&id, &1_000);
+
+    // Claim and approve both milestones (600 + 400 = 1,000)
+    c.client.claim(&id, &0, &hash(&c.env, 10));
+    c.client.approve(&id, &0);
+    c.client.claim(&id, &1, &hash(&c.env, 20));
+    c.client.approve(&id, &1);
+
+    // Disburse batch 0: 350
+    let (root0, _, total0, count0) = build_batch_with_amount(&c.env, 35, 10, 10);
+    assert_eq!(total0, 350);
+    assert_eq!(c.client.disburse(&id, &root0, &total0, &count0), 0);
+
+    // Disburse batch 1: 450
+    let (root1, _, total1, count1) = build_batch_with_amount(&c.env, 45, 20, 10);
+    assert_eq!(total1, 450);
+    assert_eq!(c.client.disburse(&id, &root1, &total1, &count1), 1);
+
+    // Disburse batch 2: 200 (exact remainder)
+    let (root2, _, total2, count2) = build_batch_with_amount(&c.env, 20, 30, 10);
+    assert_eq!(total2, 200);
+    assert_eq!(c.client.disburse(&id, &root2, &total2, &count2), 2);
+
+    let p = c.client.get_programme(&id).unwrap();
+    assert_eq!(p.disbursed, 1_000);
+    assert_eq!(p.released, 1_000);
+    assert_eq!(p.funded, 1_000);
+    assert_eq!(p.batch_count, 3);
+
+    // Extra disbursement fails: released pool exhausted
+    let (root3, _, total3, count3) = build_batch_with_amount(&c.env, 1, 40, 10);
+    assert_eq!(
+        c.client.try_disburse(&id, &root3, &total3, &count3).err(),
+        Some(Ok(Error::InsufficientReleased))
+    );
+
+    // Fast-forward past end date
+    c.env.ledger().with_mut(|l| l.timestamp = 30 * DAY);
+    assert_eq!(
+        c.client.try_refund_remainder(&id).err(),
+        Some(Ok(Error::NothingToRefund))
+    );
+}
+
+#[test]
+fn get_milestone_extreme_indices_return_none() {
+    let c = setup();
+    let id = create(&c);
+
+    // Valid indices 0 and 1
+    assert!(c.client.get_milestone(&id, &0).is_some());
+    assert!(c.client.get_milestone(&id, &1).is_some());
+
+    // Out-of-bounds indices return None
+    assert!(c.client.get_milestone(&id, &2).is_none());
+    assert!(c.client.get_milestone(&id, &25).is_none());
+    assert!(c.client.get_milestone(&id, &1_000).is_none());
+    assert!(c.client.get_milestone(&id, &u32::MAX).is_none());
+}
+
+#[test]
+fn storage_ttl_persistent_bump_audit() {
+    let c = setup();
+    let id = create(&c);
+    c.client.fund(&id, &1_000);
+    c.client.claim(&id, &0, &hash(&c.env, 10));
+    c.client.approve(&id, &0);
+
+    let (root, leaves, total, count) = build_batch(&c.env, 5, 12);
+    let batch_idx = c.client.disburse(&id, &root, &total, &count);
+
+    // Fast forward ledger time by 45 days
+    c.env.ledger().with_mut(|l| l.timestamp = 45 * DAY);
+
+    // State remains accessible and verifiable
+    let p = c.client.get_programme(&id).unwrap();
+    assert_eq!(p.id, id);
+    assert_eq!(p.batch_count, 1);
+
+    let ms = c.client.get_milestone(&id, &0);
+    assert!(ms.is_some());
+
+    let leaf = leaves.get_unchecked(2);
+    let proof = merkle_proof(&c.env, &leaves, 2);
+    assert!(c.client.verify_inclusion(&id, &batch_idx, &leaf, &proof));
+}
+
 // --- test-only Merkle helpers -------------------------------------------------
 
 // Build a batch of `n` synthetic leaves with a specified amount per leaf.
