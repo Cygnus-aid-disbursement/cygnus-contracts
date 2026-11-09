@@ -86,6 +86,9 @@ Mitigations:
 - `MAX_BATCHES (1000)` caps total batch storage entries per programme.
 - `cancel_programme` allows sponsors to cancel zero-funded programmes immediately
   without maintaining rent until the latest due date.
+- Storage TTL extension: all persistent state writes (`save` and `save_batch`) extend
+  ledger entry TTL to 120 days whenever remaining lifetime drops below 30 days,
+  ensuring records remain accessible throughout multi-month aid programs and post-program audits.
 
 ## What the protocol does not defend against
 
