@@ -983,6 +983,102 @@ fn merkle_odd_counts_and_sibling_ordering() {
 }
 
 #[test]
+fn merkle_property_fuzz_trees_and_mutation_rejections() {
+    let env = Env::default();
+    env.cost_estimate().budget().reset_unlimited();
+    let mut prng_state: u64 = 0x853c49e6748fea9b;
+
+    // Test a wide variety of tree shapes: powers of two, odd, and edge sizes
+    let sizes = [1u32, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 32, 33];
+
+    for &n in &sizes {
+        let mut leaves = Vec::new(&env);
+        for i in 0..n {
+            prng_state = prng_state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let mut r = [0u8; 32];
+            r[0..8].copy_from_slice(&prng_state.to_le_bytes());
+            r[8] = (i & 0xff) as u8;
+            r[9] = (i >> 8) as u8;
+            let recipient_ref = BytesN::from_array(&env, &r);
+            let amount = ((prng_state >> 32) as i128).abs() % 1_000_000 + 1;
+            leaves.push_back(merkle::hash_leaf(&env, &recipient_ref, amount));
+        }
+
+        let root = merkle::compute_root(&env, &leaves);
+
+        for i in 0..n {
+            let leaf = leaves.get_unchecked(i);
+            let proof = merkle_proof(&env, &leaves, i);
+
+            // Valid proof must verify
+            assert!(
+                merkle::verify(&env, &leaf, &proof, &root),
+                "Valid proof failed for leaf {i} in size {n}"
+            );
+
+            // Mutation 1: Flipping a byte in the leaf must fail
+            let mut bad_leaf_bytes = [0u8; 32];
+            leaf.copy_into_slice(&mut bad_leaf_bytes);
+            bad_leaf_bytes[0] ^= 0x01;
+            let bad_leaf = BytesN::from_array(&env, &bad_leaf_bytes);
+            assert!(
+                !merkle::verify(&env, &bad_leaf, &proof, &root),
+                "Flipped leaf byte must fail for leaf {i} in size {n}"
+            );
+
+            if !proof.is_empty() {
+                // Mutation 2: Flipping a byte in a sibling must fail
+                let mut tampered_proof = proof.clone();
+                let last_idx = proof.len() - 1;
+                let sibling = proof.get_unchecked(last_idx);
+                let mut bad_sibling_bytes = [0u8; 32];
+                sibling.copy_into_slice(&mut bad_sibling_bytes);
+                bad_sibling_bytes[15] ^= 0x80;
+                tampered_proof.set(last_idx, BytesN::from_array(&env, &bad_sibling_bytes));
+                assert!(
+                    !merkle::verify(&env, &leaf, &tampered_proof, &root),
+                    "Flipped sibling byte must fail for leaf {i} in size {n}"
+                );
+
+                // Mutation 3: Truncating proof must fail
+                let mut truncated = proof.clone();
+                truncated.pop_back();
+                assert!(
+                    !merkle::verify(&env, &leaf, &truncated, &root),
+                    "Truncated proof must fail for leaf {i} in size {n}"
+                );
+            }
+
+            // Mutation 4: Appending an extra sibling must fail
+            let mut extended = proof.clone();
+            extended.push_back(hash(&env, 7));
+            assert!(
+                !merkle::verify(&env, &leaf, &extended, &root),
+                "Extended proof must fail for leaf {i} in size {n}"
+            );
+        }
+    }
+}
+
+#[test]
+fn merkle_domain_separator_collision_resistance() {
+    let env = Env::default();
+    let r1 = hash(&env, 1);
+    let r2 = hash(&env, 2);
+
+    let leaf1 = merkle::hash_leaf(&env, &r1, 100);
+    let leaf2 = merkle::hash_leaf(&env, &r2, 200);
+
+    let node = merkle::hash_node(&env, &leaf1, &leaf2);
+
+    // An internal node (0x01 separator) cannot be verified as if it were a leaf (0x00 separator)
+    let fake_proof = vec![&env, leaf2.clone()];
+    assert!(!merkle::verify(&env, &node, &fake_proof, &node));
+}
+
+#[test]
 fn views_and_hash_leaf() {
     let c = setup();
     let id = create(&c);
